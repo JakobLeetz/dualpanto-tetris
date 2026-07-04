@@ -1,124 +1,114 @@
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using UnityEngine;
 
 /// <summary>
-/// Level 0/1 flow, hard-wired as a simple switch between two tutorial steps. A generic
-/// level framework is intentionally not built yet - see docs/dualpanto-tetris-projektstruktur.md.
+/// Continuous Tetris game loop: spawns random pieces, tracks score/level, drives fall speed.
+/// Temporary keyboard controls stand in for pedal/Panto movement input until that's wired up.
+/// The field boundary is a hand-placed GameObject with a Panto Box Collider, registered as an
+/// obstacle here once at Start - deliberately not via the toolkit's Obstacle Manager, since that
+/// scans the whole scene for any PantoCollider and would also pick up (and permanently freeze in
+/// place) the falling piece's visual-only blocks. Locked-block obstacles and piece-handle
+/// feedback live in Board/LockedBlocksView and Board/PieceHandle.
 /// </summary>
 public class GameManager : Singleton<GameManager>
 {
-    public enum TutorialStep
-    {
-        Level0_ExploreBoundary,
-        Level1_FirstPieceFalls,
-        Done
-    }
-
     [SerializeField] GridManager gridManager;
-    [SerializeField] LevelDefinition level0;
-    [SerializeField] LevelDefinition level1;
-    [SerializeField] Transform lockedBlocksContainer;
+    [SerializeField] int gridWidth = 10;
+    [SerializeField] int gridHeight = 20;
+    [SerializeField] bool debugLogging = true;
 
-    readonly List<GameObject> boundaryObstacles = new List<GameObject>();
+    public int Score { get; private set; }
+    public int LinesCleared { get; private set; }
+    public int Level { get; private set; }
+    public bool IsGameOver { get; private set; }
 
-    public TutorialStep CurrentStep { get; private set; }
-
-    async void Start()
+    void Start()
     {
-        await RunLevel0();
-        await RunLevel1();
-        CurrentStep = TutorialStep.Done;
+        gridManager.Initialize(gridWidth, gridHeight);
+        gridManager.OnPieceMoved += HandlePieceMoved;
+        gridManager.OnPieceRotated += HandlePieceMoved;
+        gridManager.OnPieceLocked += _ => SpawnRandomPiece();
+        gridManager.OnLinesCleared += HandleLinesCleared;
+        gridManager.OnGameOver += HandleGameOver;
+
+        // PantoSystem.CreateBoxObstacle defers registration itself if the device/sync isn't
+        // ready yet, so no delay needed here (see toolkit README troubleshooting for why that
+        // matters - registering too early can silently fail).
+        PantoSystem.Instance.CreateBoxObstacle(gridManager.Frame.gameObject, onUpper: true, onLower: false);
+        gridManager.SetFallFramesPerRow(FramesForLevel(Level));
+        SpawnRandomPiece();
     }
 
-    async Task RunLevel0()
+    void SpawnRandomPiece()
     {
-        CurrentStep = TutorialStep.Level0_ExploreBoundary;
-        gridManager.Initialize(level0.gridWidth, level0.gridHeight);
-        BuildBoundaryObstacles();
-
-        await SpeechSystem.Instance.Say(level0.introText);
-        await WaitForContinueInput();
+        PieceType type = (PieceType)Random.Range(0, 7);
+        gridManager.SpawnPiece(type);
+        Log($"Spawned {type}");
     }
 
-    async Task RunLevel1()
+    void HandlePieceMoved(List<Vector2Int> cells)
     {
-        CurrentStep = TutorialStep.Level1_FirstPieceFalls;
-        ClearBoundaryObstacles();
-        gridManager.Initialize(level1.gridWidth, level1.gridHeight);
-        BuildBoundaryObstacles();
-
-        await SpeechSystem.Instance.Say(level1.introText);
-
-        var pieceLocked = new TaskCompletionSource<bool>();
-        void OnLocked(List<Vector2Int> cells)
-        {
-            SpawnLockedBlocks(cells);
-            pieceLocked.TrySetResult(true);
-        }
-
-        gridManager.OnPieceLocked += OnLocked;
-        gridManager.SpawnPiece(level1.allowedPieces[0]);
-        await pieceLocked.Task;
-        gridManager.OnPieceLocked -= OnLocked;
-
-        await SpeechSystem.Instance.Say("Der Stein ist gelandet.");
+        Log($"Piece moved: {string.Join(", ", cells)}");
     }
 
-    // Keyboard fallback for the pedal input, which isn't wired up yet (see docs, open question).
-    async Task WaitForContinueInput()
+    void HandleLinesCleared(List<int> rows)
     {
-        while (!Input.GetKeyDown(KeyCode.Space))
-        {
-            await Task.Delay(10);
-        }
+        Score += LineClearScore(rows.Count) * (Level + 1);
+        LinesCleared += rows.Count;
+        Level = LinesCleared / 10;
+        gridManager.SetFallFramesPerRow(FramesForLevel(Level));
+        Log($"Cleared {rows.Count} line(s) -> Score: {Score}, Lines: {LinesCleared}, Level: {Level}");
     }
 
-    void BuildBoundaryObstacles()
+    void HandleGameOver()
     {
-        float cs = gridManager.CellSize;
-        float fieldWidth = gridManager.Width * cs;
-        float fieldHeight = gridManager.Height * cs;
-        float wallThickness = cs * 0.2f;
-        Vector3 center = gridManager.transform.position + new Vector3((fieldWidth - cs) / 2f, 0f, (fieldHeight - cs) / 2f);
-
-        boundaryObstacles.Add(CreateWall("Wall_South", center + new Vector3(0f, 0f, -fieldHeight / 2f), new Vector3(fieldWidth, cs, wallThickness)));
-        boundaryObstacles.Add(CreateWall("Wall_North", center + new Vector3(0f, 0f, fieldHeight / 2f), new Vector3(fieldWidth, cs, wallThickness)));
-        boundaryObstacles.Add(CreateWall("Wall_West", center + new Vector3(-fieldWidth / 2f, 0f, 0f), new Vector3(wallThickness, cs, fieldHeight)));
-        boundaryObstacles.Add(CreateWall("Wall_East", center + new Vector3(fieldWidth / 2f, 0f, 0f), new Vector3(wallThickness, cs, fieldHeight)));
+        IsGameOver = true;
+        Log($"Game Over. Score: {Score}, Lines: {LinesCleared}, Level: {Level}");
+        _ = SpeechSystem.Instance.Say($"Game Over. Score {Score}.");
     }
 
-    void ClearBoundaryObstacles()
+    void Log(string message)
     {
-        foreach (GameObject wall in boundaryObstacles)
-        {
-            Destroy(wall);
-        }
-        boundaryObstacles.Clear();
+        if (debugLogging) Debug.Log($"[GameManager] {message}");
     }
 
-    GameObject CreateWall(string name, Vector3 center, Vector3 size)
+    void Update()
     {
-        GameObject wall = new GameObject(name);
-        wall.transform.SetParent(gridManager.transform, worldPositionStays: false);
-        wall.transform.position = center;
-        BoxCollider box = wall.AddComponent<BoxCollider>();
-        box.size = size;
-        PantoSystem.Instance.CreateBoxObstacle(wall, onUpper: true, onLower: false);
-        return wall;
+        if (IsGameOver) return;
+
+        if (Input.GetKeyDown(KeyCode.LeftArrow)) gridManager.TryMove(Vector2Int.left);
+        if (Input.GetKeyDown(KeyCode.RightArrow)) gridManager.TryMove(Vector2Int.right);
+        if (Input.GetKeyDown(KeyCode.UpArrow)) gridManager.TryRotate(1);
+        if (Input.GetKey(KeyCode.DownArrow) && gridManager.SoftDrop()) Score += 1;
     }
 
-    void SpawnLockedBlocks(List<Vector2Int> cells)
+    // Classic NES scoring: base points per simultaneous line count, multiplied by (level + 1).
+    static int LineClearScore(int lineCount) => lineCount switch
     {
-        foreach (Vector2Int cell in cells)
-        {
-            GameObject block = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            block.name = $"LockedBlock_{cell.x}_{cell.y}";
-            block.transform.SetParent(lockedBlocksContainer, worldPositionStays: false);
-            block.transform.position = gridManager.GridToWorld(cell);
-            block.transform.localScale = Vector3.one * gridManager.CellSize;
-            block.AddComponent<LockedBlock>().GridPosition = cell;
-            PantoSystem.Instance.CreateBoxObstacle(block, onUpper: true, onLower: false);
-        }
-    }
+        1 => 40,
+        2 => 100,
+        3 => 300,
+        4 => 1200,
+        _ => 0,
+    };
+
+    // Classic NES frames-per-row speed curve (60 fps).
+    static int FramesForLevel(int level) => level switch
+    {
+        0 => 300,
+        1 => 43,
+        2 => 38,
+        3 => 33,
+        4 => 28,
+        5 => 23,
+        6 => 18,
+        7 => 13,
+        8 => 8,
+        9 => 6,
+        >= 10 and <= 12 => 5,
+        >= 13 and <= 15 => 4,
+        >= 16 and <= 18 => 3,
+        >= 19 and <= 28 => 2,
+        _ => 1,
+    };
 }

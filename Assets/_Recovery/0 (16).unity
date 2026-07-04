@@ -431,6 +431,7 @@ MonoBehaviour:
   gridWidth: 5
   gridHeight: 10
   debugLogging: 1
+  lockPauseSeconds: 4
 --- !u!4 &874714685
 Transform:
   m_ObjectHideFlags: 0
@@ -684,9 +685,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PieceCursor
   gridManager: {fileID: 874714686}
-  handleSpeed: 28
+  handleSpeed: 25
   cellPauseSeconds: 0.35
-  firstWaypointPauseSeconds: 0.6
 --- !u!114 &1617433927
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -701,8 +701,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::PieceNudgeInput
   gridManager: {fileID: 874714686}
   pieceHandle: {fileID: 1617433926}
-  moveTriggerFraction: 0.3
-  rotateTriggerFraction: 0.6
+  triggerFraction: 0.3
 --- !u!1 &1649454047
 GameObject:
   m_ObjectHideFlags: 0

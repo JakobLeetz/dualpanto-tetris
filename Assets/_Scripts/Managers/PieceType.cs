@@ -4,5 +4,11 @@
 /// </summary>
 public enum PieceType
 {
-    I // 4x1 piece, the only shape needed for Level 0/1
+    I,
+    O,
+    T,
+    S,
+    Z,
+    J,
+    L
 }

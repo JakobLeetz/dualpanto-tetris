@@ -601,6 +601,7 @@ GameObject:
   - component: {fileID: 1617433924}
   - component: {fileID: 1617433926}
   - component: {fileID: 1617433927}
+  - component: {fileID: 1617433928}
   m_Layer: 0
   m_Name: PieceHandle
   m_TagString: Untagged
@@ -684,7 +685,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PieceCursor
   gridManager: {fileID: 874714686}
-  handleSpeed: 28
+  handleSpeed: 23
   cellPauseSeconds: 0.35
   firstWaypointPauseSeconds: 0.6
 --- !u!114 &1617433927
@@ -703,6 +704,21 @@ MonoBehaviour:
   pieceHandle: {fileID: 1617433926}
   moveTriggerFraction: 0.3
   rotateTriggerFraction: 0.6
+--- !u!114 &1617433928
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1617433921}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7a0cd99c2b2a343ab975bb8748134731, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::RotatingHandle
+  isUpper: 0
+  angle: 0
+  angleStep: 0.01
 --- !u!1 &1649454047
 GameObject:
   m_ObjectHideFlags: 0

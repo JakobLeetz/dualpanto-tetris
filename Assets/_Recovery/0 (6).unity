@@ -245,8 +245,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 349790109}
-  - component: {fileID: 349790111}
-  - component: {fileID: 349790110}
   m_Layer: 0
   m_Name: Blocks
   m_TagString: Untagged
@@ -269,33 +267,50 @@ Transform:
   m_Children: []
   m_Father: {fileID: 1534874585}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &349790110
+--- !u!1 &571452742
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 571452743}
+  - component: {fileID: 571452744}
+  m_Layer: 0
+  m_Name: FallingPieceView
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &571452743
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 571452742}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: -11.87059, y: 5.1673, z: -5.4945602}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1534874585}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &571452744
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 349790108}
+  m_GameObject: {fileID: 571452742}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: f745a286fcc364dc889db716a4992aab, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::FallingPieceView
-  gridManager: {fileID: 874714686}
-  container: {fileID: 349790109}
-  blockPrefab: {fileID: 2269414077794870224, guid: 9ba6e64edc10544779e85507a9f57745, type: 3}
---- !u!114 &349790111
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 349790108}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: e774ea60209594e2c8c9ab7a65fa0d64, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::LockedBlocksView
   gridManager: {fileID: 874714686}
   container: {fileID: 349790109}
   blockPrefab: {fileID: 2269414077794870224, guid: 9ba6e64edc10544779e85507a9f57745, type: 3}
@@ -428,9 +443,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameManager
   gridManager: {fileID: 874714686}
-  gridWidth: 5
-  gridHeight: 10
-  debugLogging: 1
+  gridWidth: 10
+  gridHeight: 20
+  debugLogging: 0
 --- !u!4 &874714685
 Transform:
   m_ObjectHideFlags: 0
@@ -487,11 +502,11 @@ Transform:
   m_GameObject: {fileID: 1049858927}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 12.23096, y: -5.1673, z: 2.26398}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 1534874585}
+  m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &1049858929
 MonoBehaviour:
@@ -524,7 +539,7 @@ SphereCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 3
-  m_Radius: 0.25
+  m_Radius: 0.5
   m_Center: {x: 0, y: 0, z: 0}
 --- !u!54 &1049858931
 Rigidbody:
@@ -582,9 +597,9 @@ Transform:
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 1049858928}
-  - {fileID: 1617433922}
   - {fileID: 2095633801}
+  - {fileID: 1811739820}
+  - {fileID: 571452743}
   - {fileID: 349790109}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
@@ -599,10 +614,9 @@ GameObject:
   - component: {fileID: 1617433922}
   - component: {fileID: 1617433925}
   - component: {fileID: 1617433924}
-  - component: {fileID: 1617433926}
-  - component: {fileID: 1617433927}
+  - component: {fileID: 1617433923}
   m_Layer: 0
-  m_Name: PieceHandle
+  m_Name: PieceCursor
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -617,12 +631,26 @@ Transform:
   m_GameObject: {fileID: 1617433921}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 12.23096, y: -5.1673, z: 2.26398}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 1534874585}
+  m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1617433923
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1617433921}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 41019dc1d0a564357841b3d19e7607a9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::PieceCursor
+  gridManager: {fileID: 874714686}
+  handleSpeed: 15
 --- !u!135 &1617433924
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -671,38 +699,6 @@ Rigidbody:
   m_Interpolate: 0
   m_Constraints: 0
   m_CollisionDetection: 0
---- !u!114 &1617433926
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1617433921}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: faaeb11fcbd2e4d6b9041d663b44adc3, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::PieceCursor
-  gridManager: {fileID: 874714686}
-  handleSpeed: 28
-  cellPauseSeconds: 0.35
-  firstWaypointPauseSeconds: 0.6
---- !u!114 &1617433927
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1617433921}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8d62af77b8acc4a0ea1e724f78fdad2c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::PieceNudgeInput
-  gridManager: {fileID: 874714686}
-  pieceHandle: {fileID: 1617433926}
-  moveTriggerFraction: 0.3
-  rotateTriggerFraction: 0.6
 --- !u!1 &1649454047
 GameObject:
   m_ObjectHideFlags: 0
@@ -746,6 +742,53 @@ Transform:
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1811739818
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1811739820}
+  - component: {fileID: 1811739819}
+  m_Layer: 0
+  m_Name: LockedBlocksView
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1811739819
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1811739818}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e774ea60209594e2c8c9ab7a65fa0d64, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::LockedBlocksView
+  gridManager: {fileID: 874714686}
+  container: {fileID: 349790109}
+  blockPrefab: {fileID: 2269414077794870224, guid: 9ba6e64edc10544779e85507a9f57745, type: 3}
+--- !u!4 &1811739820
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1811739818}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1534874585}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2095633796
 GameObject:
@@ -883,4 +926,6 @@ SceneRoots:
   - {fileID: 168007839}
   - {fileID: 874714685}
   - {fileID: 1649454049}
+  - {fileID: 1617433922}
+  - {fileID: 1049858928}
   - {fileID: 1534874585}

@@ -701,8 +701,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::PieceNudgeInput
   gridManager: {fileID: 874714686}
   pieceHandle: {fileID: 1617433926}
-  moveTriggerFraction: 0.3
-  rotateTriggerFraction: 0.6
+  moveTriggerFraction: 0.2
+  rotateTriggerFraction: 1
 --- !u!1 &1649454047
 GameObject:
   m_ObjectHideFlags: 0
