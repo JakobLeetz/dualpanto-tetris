@@ -312,9 +312,10 @@ public class GridManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Waypoints for PieceHandle to trace - same as GetPieceCells() for every piece except T,
-    /// which walks back through its center cell instead of jumping (see TTraceWaypoints). May
-    /// contain the same cell more than once; never use this for collision/locking.
+    /// Waypoints for PieceHandle to trace - same as GetPieceCells() for every piece except T
+    /// (walks back through its center cell instead of jumping, see TTraceWaypoints) and O (traces
+    /// back to its start cell, see below). May contain the same cell more than once; never use this
+    /// for collision/locking.
     /// </summary>
     public List<Vector2Int> GetPieceTraceWaypoints()
     {
@@ -323,12 +324,33 @@ public class GridManager : MonoBehaviour
         Vector2Int[] waypoints = currentPieceType == PieceType.T ? TTraceWaypoints[currentRotation] : pieceShape;
         foreach (Vector2Int offset in waypoints)
             result.Add(pieceOrigin + offset);
+        // The O-piece ("circle") is a closed 2x2 loop; trace back to the starting cell so the
+        // handle ends where it began instead of resting at the last (bottom-right) corner.
+        if (currentPieceType == PieceType.O && waypoints.Length > 0)
+            result.Add(pieceOrigin + waypoints[0]);
         return result;
     }
 
     public Vector3 GridToWorld(Vector2Int cell)
     {
         return originWorld + new Vector3(cell.x * cellSize, 0f, cell.y * cellSize);
+    }
+
+    /// <summary>
+    /// Inverse of GridToWorld: the grid cell whose centre is nearest to a world position, clamped
+    /// to the valid range so a position just outside the field still maps to the nearest edge cell.
+    /// </summary>
+    public Vector2Int WorldToGrid(Vector3 world)
+    {
+        int x = Mathf.RoundToInt((world.x - originWorld.x) / cellSize);
+        int y = Mathf.RoundToInt((world.z - originWorld.z) / cellSize);
+        return new Vector2Int(Mathf.Clamp(x, 0, Width - 1), Mathf.Clamp(y, 0, Height - 1));
+    }
+
+    public bool IsLocked(Vector2Int cell)
+    {
+        if (cell.x < 0 || cell.x >= Width || cell.y < 0 || cell.y >= Height) return false;
+        return cells[cell.x, cell.y] == CellState.Locked;
     }
 
     public List<Vector2Int> GetLockedCells()

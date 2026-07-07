@@ -39,20 +39,18 @@ public class PieceHandle : MonoBehaviour
     // reasons that have nothing to do with the player pushing it.
     public bool IsSettled { get; private set; }
 
-    // Since the handle no longer snaps/retraces on a shift or rotation (see HandlePieceShifted/
-    // HandlePieceRotated below), a sustained push's real-vs-target displacement never shrinks on
-    // its own - without these flags PieceNudgeInput would fire TryMove/TryRotate every single
-    // frame the push stays past threshold. Only true again once the piece actually falls (a real
-    // OnPieceMoved), so a push yields exactly one shift/rotation per fall step no matter how long
-    // it's held.
-    public bool CanShiftAgain { get; private set; } = true;
+    // The handle doesn't retrace on rotation (see HandlePieceRotated below), so a sustained
+    // rotate-push's real-vs-target displacement never shrinks on its own - without this flag
+    // PieceNudgeInput would fire TryRotate every single frame the push stays past threshold. Only
+    // true again once the piece actually falls (a real OnPieceMoved), so a push yields exactly one
+    // rotation per fall step no matter how long it's held. (Left/right shifts are no longer handled
+    // here at all - they come from foot pedals via GameManager now.)
     public bool CanRotateAgain { get; private set; } = true;
 
     void OnEnable()
     {
         gridManager.OnPieceSpawned += HandlePieceMoved;
         gridManager.OnPieceMoved += HandlePieceMoved;
-        gridManager.OnPieceShifted += HandlePieceShifted;
         gridManager.OnPieceRotated += HandlePieceRotated;
     }
 
@@ -60,7 +58,6 @@ public class PieceHandle : MonoBehaviour
     {
         gridManager.OnPieceSpawned -= HandlePieceMoved;
         gridManager.OnPieceMoved -= HandlePieceMoved;
-        gridManager.OnPieceShifted -= HandlePieceShifted;
         gridManager.OnPieceRotated -= HandlePieceRotated;
     }
 
@@ -68,23 +65,12 @@ public class PieceHandle : MonoBehaviour
     {
         int myVersion = ++traceVersion;
         IsSettled = false;
-        CanShiftAgain = true;
         CanRotateAgain = true;
         _ = RetraceShape(gridManager.GetPieceTraceWaypoints(), myVersion);
     }
 
-    // The handle itself stays put wherever it currently is on a shift - it only picks up the
-    // piece's new (possibly shifted) position on the next fall step's full retrace. No snap/
-    // visual feedback for shifts for now; a duration-based move-distance + sound feedback design
-    // is planned for later (sound design pass), not this one.
-    void HandlePieceShifted(Vector2Int direction)
-    {
-        CanShiftAgain = false;
-    }
-
-    // Same reasoning as HandlePieceShifted: rotating the piece's shape is only felt once the
-    // piece actually falls and the next full retrace picks up the new shape - no immediate
-    // retrace on rotation itself.
+    // Rotating the piece's shape is only felt once the piece actually falls and the next full
+    // retrace picks up the new shape - no immediate retrace on rotation itself.
     void HandlePieceRotated(List<Vector2Int> cells)
     {
         CanRotateAgain = false;
@@ -117,6 +103,16 @@ public class PieceHandle : MonoBehaviour
                 // rotations while the first piece is still catching up).
                 await PantoSystem.Instance.FollowTarget(isUpper: false, gameObject, handleSpeed);
                 if (version != traceVersion) return;
+
+                // Re-assert speed exactly once, right here after the first arrival is confirmed.
+                // SwitchTo already sent the speed once at the very start, but that packet can race
+                // the firmware's motor-task boot and get dropped, leaving the handle on a slow
+                // default all session (~50% of runs, felt as low power / high resistance). By the
+                // time this await returns the firmware has definitely processed a full transition,
+                // so it's guaranteed ready to accept the speed now. Sent once (not per fall step) -
+                // a per-step re-send floods the position stream with SendSpeed packets and drags
+                // the handle to the bottom edge (observed on hardware). No-op in debug mode.
+                PantoSystem.Instance.SetHandleSpeed(isUpper: false, handleSpeed);
             }
 
             await Task.Delay(TimeSpan.FromSeconds(isFirst ? firstWaypointPauseSeconds : cellPauseSeconds));

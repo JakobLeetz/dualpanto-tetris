@@ -1,12 +1,13 @@
 using System.Collections.Generic;
-using DualPantoToolkit;
 using UnityEngine;
 
 /// <summary>
-/// Keeps an instance of blockPrefab per locked grid cell in sync with GridManager, registering
-/// each as a box obstacle so the stack handle can feel the stack. Rebuilds from scratch after a
-/// line clear instead of shifting individual blocks - simpler and correct, cheap enough at grid
-/// sizes up to ~200 cells.
+/// Keeps a visual blockPrefab instance per locked grid cell in sync with GridManager. Locked cells
+/// are NOT registered as hard Panto obstacles - the stack handle feels them via the magnetic-grid
+/// pulsing force instead (see StackHandle), which reads locked state straight from GridManager, so
+/// these blocks are purely visual. Their colliders are made triggers so they never hard-block the
+/// handle's raycast in the emulator either. Rebuilds from scratch after a line clear instead of
+/// shifting individual blocks - simpler and correct, cheap enough at grid sizes up to ~200 cells.
 /// </summary>
 public class LockedBlocksView : MonoBehaviour
 {
@@ -40,9 +41,6 @@ public class LockedBlocksView : MonoBehaviour
     {
         foreach (GameObject block in blocks.Values)
         {
-            // Destroying the GameObject alone doesn't unregister the obstacle from the Panto
-            // engine - without this it keeps giving force feedback at the old position forever.
-            PantoSystem.Instance.RemoveObstacle(block.GetComponent<PantoBoxCollider>());
             Destroy(block);
         }
         blocks.Clear();
@@ -60,7 +58,11 @@ public class LockedBlocksView : MonoBehaviour
         block.transform.position = gridManager.GridToWorld(cell);
         block.transform.localScale = Vector3.one * gridManager.CellSize;
         block.GetComponent<GridBlock>().GridPosition = cell;
-        PantoSystem.Instance.CreateBoxObstacle(block, onUpper: true, onLower: false);
+        // Purely visual: not a Panto obstacle, and its collider is a trigger so it never hard-blocks
+        // the stack handle's raycast in the emulator (the handle feels locked cells via StackHandle's
+        // pulsing force instead, read straight from GridManager).
+        Collider col = block.GetComponent<Collider>();
+        if (col != null) col.isTrigger = true;
         blocks[cell] = block;
     }
 }

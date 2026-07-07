@@ -76,6 +76,13 @@ public class GameManager : Singleton<GameManager>
     {
         if (IsGameOver) return;
 
+        // Left/right is driven by two foot pedals, each wired to emit a keycode: U = left, V =
+        // right. One move per press (GetKeyDown is edge-triggered), so no rate-limiting needed.
+        // Rotation still comes from nudging the it-handle (see PieceNudgeInput).
+        if (Input.GetKeyDown(KeyCode.U)) gridManager.TryMove(Vector2Int.left);
+        if (Input.GetKeyDown(KeyCode.V)) gridManager.TryMove(Vector2Int.right);
+
+        // Temporary arrow-key fallbacks for testing without the pedals/device.
         if (Input.GetKeyDown(KeyCode.LeftArrow)) gridManager.TryMove(Vector2Int.left);
         if (Input.GetKeyDown(KeyCode.RightArrow)) gridManager.TryMove(Vector2Int.right);
         if (Input.GetKeyDown(KeyCode.UpArrow)) gridManager.TryRotate(1);

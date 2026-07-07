@@ -505,13 +505,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7100b2cb151924df487c0076ca9c873f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::StackHandle
-  gridManager: {fileID: 874714686}
-  pullStrength: 0.3
-  dampingFactor: 0.1
-  centerDeadzone: 0.05
-  buzzStrength: 0.15
-  buzzFrequency: 8
-  debugLogging: 1
 --- !u!135 &1049858930
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -691,7 +684,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PieceCursor
   gridManager: {fileID: 874714686}
-  handleSpeed: 50
+  handleSpeed: 25
   cellPauseSeconds: 0.35
   firstWaypointPauseSeconds: 0.6
 --- !u!114 &1617433927
@@ -708,6 +701,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::PieceNudgeInput
   gridManager: {fileID: 874714686}
   pieceHandle: {fileID: 1617433926}
+  moveTriggerFraction: 1
   rotateTriggerFraction: 1
 --- !u!1 &1649454047
 GameObject:

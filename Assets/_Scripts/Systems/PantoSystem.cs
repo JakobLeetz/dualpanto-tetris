@@ -19,9 +19,14 @@ public class PantoSystem : StaticInstance<PantoSystem>
 
     UpperHandle upperHandle; // "Me"/stack handle, moved by the player
     LowerHandle lowerHandle; // "It"/piece handle, actuated by the device
+    DualPantoSync sync;
     float readyAt;
     readonly List<Action> pendingObstacles = new List<Action>();
     readonly List<PantoBoxCollider> allObstacles = new List<PantoBoxCollider>();
+
+    // Mirrors PantoHandle.MaxMovementSpeed() (protected there) - the toolkit clamps every speed it
+    // sends the firmware to this, so SetHandleSpeed does the same when re-sending directly.
+    const float MaxMovementSpeed = 100f;
 
     protected override void Awake()
     {
@@ -35,6 +40,7 @@ public class PantoSystem : StaticInstance<PantoSystem>
         }
         upperHandle = panto.GetComponent<UpperHandle>();
         lowerHandle = panto.GetComponent<LowerHandle>();
+        sync = panto.GetComponent<DualPantoSync>();
     }
 
     bool IsReady => Time.time >= readyAt;
@@ -87,8 +93,38 @@ public class PantoSystem : StaticInstance<PantoSystem>
         return GetHandle(isUpper).SwitchTo(target, speed);
     }
 
+    /// <summary>
+    /// Re-sends the handle's movement speed to the firmware. The toolkit only ever sets speed once,
+    /// inside SwitchTo - and since we call SwitchTo exactly once per session (persistent-target
+    /// design), that single SetSpeed is a one-shot: if its packet races the firmware's motor-task
+    /// readiness and gets dropped, the handle stays stuck on the firmware's slow default speed
+    /// (feels like low power / high resistance) for the whole session with nothing to correct it.
+    /// PieceHandle calls this exactly once, right after the first SwitchTo/FollowTarget arrival is
+    /// confirmed (firmware guaranteed ready by then), to re-assert the speed in case that first
+    /// packet was dropped. Deliberately NOT called per fall step: re-sending on every step floods
+    /// the position stream with SendSpeed packets and drags the handle to the bottom edge (observed
+    /// on hardware). No-op in debug/emulator mode, matching how the toolkit only touches speed when
+    /// !debug.
+    /// </summary>
+    public void SetHandleSpeed(bool isUpper, float speed)
+    {
+        if (sync == null || sync.debug) return;
+        sync.SetSpeed(isUpper, Mathf.Min(speed, MaxMovementSpeed));
+    }
+
     public void FreeHandle(bool isUpper) => GetHandle(isUpper).Free();
     public void FreezeHandle(bool isUpper) => GetHandle(isUpper).Freeze();
+
+    /// <summary>
+    /// Applies a continuous force to the handle (toolkit force mode). direction is normalized and
+    /// strength clamped to [0,1] by the toolkit, so passing a force vector as direction with its
+    /// magnitude as strength just caps the force at unit length. No-op in debug/emulator mode
+    /// (SendMotor only fires when !debug). Call every FixedUpdate while a force should be felt.
+    /// </summary>
+    public void ApplyForce(bool isUpper, Vector3 direction, float strength) =>
+        GetHandle(isUpper).ApplyForce(direction, strength);
+
+    public void StopApplyingForce(bool isUpper) => GetHandle(isUpper).StopApplyingForce();
 
     /// <summary>
     /// Registers a box obstacle matching the GameObject's BoxCollider, so the stack handle can feel it.
