@@ -116,6 +116,31 @@ public class PantoSystem : StaticInstance<PantoSystem>
     public void FreezeHandle(bool isUpper) => GetHandle(isUpper).Freeze();
 
     /// <summary>
+    /// Moves the handle once to a world position, then frees it again (so a force-driven handle can
+    /// resume). Awaitable - completes when the move finishes. Used to place the stack handle inside
+    /// the field at game start.
+    /// </summary>
+    public Task MoveHandleTo(bool isUpper, Vector3 position, float speed) =>
+        GetHandle(isUpper).MoveToPosition(position, speed, shouldFreeHandle: true);
+
+    /// <summary>
+    /// Hands rotation control of the handle back to the player while keeping the game's hold on its
+    /// POSITION. Requires the toolkit fix in PantoHandle.FixedUpdate that respects
+    /// userControlledRotation on hardware (otherwise the per-frame position re-send re-commands the
+    /// target's angle and overrides this). Call once, after the handle is following a target.
+    /// </summary>
+    public void FreeRotation(bool isUpper) => GetHandle(isUpper).FreeRotation();
+
+    /// <summary>Current rotation of the handle in degrees (Unity Y), for reading player turn input.</summary>
+    public float GetHandleRotation(bool isUpper) => GetHandle(isUpper).GetRotation();
+
+    /// <summary>
+    /// Commands only the handle's rotation (position left free), via the toolkit's Rotate. Works
+    /// without SwitchTo, so it's the clean way to drive a free handle's rotation. No-op in debug.
+    /// </summary>
+    public void RotateHandle(bool isUpper, float angleDegrees) => GetHandle(isUpper).Rotate(angleDegrees);
+
+    /// <summary>
     /// Applies a continuous force to the handle (toolkit force mode). direction is normalized and
     /// strength clamped to [0,1] by the toolkit, so passing a force vector as direction with its
     /// magnitude as strength just caps the force at unit length. No-op in debug/emulator mode

@@ -111,6 +111,11 @@ public class GridManager : MonoBehaviour
     bool hasPiece;
     float fallInterval = 48f / 60f;
     float fallTimer;
+    bool fallPaused;
+    float fallPausedAt;
+    // Failsafe: if nothing calls ResumeFall (e.g. no PieceHandle in the scene to run the cleared-
+    // line trace), auto-resume so the game can never get stuck paused. Longer than any real trace.
+    const float MaxClearPauseSeconds = 15f;
     float cellSize;
     Vector3 originWorld;
 
@@ -127,6 +132,12 @@ public class GridManager : MonoBehaviour
     public event Action<List<Vector2Int>> OnPieceLocked;
     public event Action<List<int>> OnLinesCleared;
     public event Action OnGameOver;
+    // Fires when a relative rotation attempt (TryRotate) couldn't find any valid orientation/kick -
+    // i.e. the player tried to rotate but it's genuinely blocked. Not fired for TrySetRotation calls
+    // that are no-ops because the target state already matches (that's not a "failed" attempt).
+    public event Action OnRotationFailed;
+    // Fires when the board is cleared for a restart, so views (locked blocks etc.) can wipe themselves.
+    public event Action OnReset;
 
     public int Width { get; private set; }
     public int Height { get; private set; }
@@ -150,6 +161,18 @@ public class GridManager : MonoBehaviour
         Debug.Log($"[GridManager] Initialize: frame={frame.gameObject.name} frame.transform.position={frame.transform.position} " +
             $"frame.center={frame.center} frame.size={frame.size} frame.transform.lossyScale={frame.transform.lossyScale} " +
             $"frameSize={frameSize} cellSize={cellSize} frameCenter={frameCenter} originWorld={originWorld}");
+    }
+
+    /// <summary>Wipes the board back to an empty, piece-less state for a restart. Fires OnReset so
+    /// views can clear their visuals; the caller then spawns a fresh piece.</summary>
+    public void Reset()
+    {
+        if (cells != null) System.Array.Clear(cells, 0, cells.Length);
+        hasPiece = false;
+        fallPaused = false;
+        currentRotation = 0;
+        fallTimer = 0f;
+        OnReset?.Invoke();
     }
 
     public void SetFallFramesPerRow(int frames)
@@ -195,6 +218,11 @@ public class GridManager : MonoBehaviour
 
     void Update()
     {
+        if (fallPaused)
+        {
+            if (Time.time - fallPausedAt > MaxClearPauseSeconds) ResumeFall();
+            return;
+        }
         if (!hasPiece) return;
         fallTimer += Time.deltaTime;
         if (fallTimer >= fallInterval)
@@ -202,6 +230,22 @@ public class GridManager : MonoBehaviour
             fallTimer -= fallInterval;
             StepDown();
         }
+    }
+
+    // Suspends gravity (and soft drop) - used during the cleared-line trace so a freshly spawned
+    // piece doesn't start falling until that animation has fully played out. See ResumeFall.
+    public void PauseFall()
+    {
+        fallPaused = true;
+        fallPausedAt = Time.time;
+    }
+
+    // Called by PieceHandle when the cleared-line trace finishes; gives the piece a full interval
+    // before its next drop.
+    public void ResumeFall()
+    {
+        fallPaused = false;
+        fallTimer = 0f;
     }
 
     void StepDown()
@@ -213,7 +257,7 @@ public class GridManager : MonoBehaviour
     /// <summary>Manually steps the piece down by one row (soft drop). Returns whether it moved.</summary>
     public bool SoftDrop()
     {
-        if (!hasPiece) return false;
+        if (!hasPiece || fallPaused) return false;
         fallTimer = 0f;
         bool moved = TryMove(Vector2Int.down);
         if (!moved) LockPiece();
@@ -233,11 +277,27 @@ public class GridManager : MonoBehaviour
         return true;
     }
 
+    public int CurrentRotation => currentRotation;
+
     public bool TryRotate(int direction)
     {
         if (!hasPiece) return false;
-        int nextRotation = ((currentRotation + direction) % 4 + 4) % 4;
-        Vector2Int[] candidate = Shapes[currentPieceType][nextRotation];
+        bool rotated = TrySetRotation(((currentRotation + direction) % 4 + 4) % 4);
+        if (!rotated) OnRotationFailed?.Invoke();
+        return rotated;
+    }
+
+    /// <summary>
+    /// Rotates the piece to an absolute rotation state (0-3), with the same horizontal wall-kick
+    /// fallback as TryRotate. No-op (returns false) if already in that state or the piece can't fit.
+    /// Used by handle-rotation input, which maps the physical handle angle to an absolute state.
+    /// </summary>
+    public bool TrySetRotation(int targetRotation)
+    {
+        if (!hasPiece) return false;
+        targetRotation = (targetRotation % 4 + 4) % 4;
+        if (targetRotation == currentRotation) return false;
+        Vector2Int[] candidate = Shapes[currentPieceType][targetRotation];
 
         foreach (int kick in RotationKicks)
         {
@@ -246,7 +306,7 @@ public class GridManager : MonoBehaviour
             {
                 pieceOrigin = candidateOrigin;
                 pieceShape = candidate;
-                currentRotation = nextRotation;
+                currentRotation = targetRotation;
                 OnPieceRotated?.Invoke(GetPieceCells());
                 return true;
             }
@@ -299,6 +359,10 @@ public class GridManager : MonoBehaviour
             for (int x = 0; x < Width; x++)
                 cells[x, Height - 1] = CellState.Empty;
         }
+        // Freeze gravity until the cleared-line trace finishes (PieceHandle calls ResumeFall). The
+        // next piece has already spawned (in OnPieceLocked above), so this holds it in place at the
+        // top instead of letting it fall during the trace.
+        PauseFall();
         OnLinesCleared?.Invoke(clearedRows);
     }
 

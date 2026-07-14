@@ -32,48 +32,49 @@ public class PieceHandle : MonoBehaviour
     int traceVersion;
     bool following;
 
-    // True once the current retrace has finished and the handle is just resting at the last
-    // waypoint - false while a trace is actively moving the target around. PieceNudgeInput only
-    // reads real-vs-commanded handle displacement as a left/right input while this is true, since
-    // during an active trace the handle normally lags behind its (constantly moving) target for
-    // reasons that have nothing to do with the player pushing it.
-    public bool IsSettled { get; private set; }
-
-    // The handle doesn't retrace on rotation (see HandlePieceRotated below), so a sustained
-    // rotate-push's real-vs-target displacement never shrinks on its own - without this flag
-    // PieceNudgeInput would fire TryRotate every single frame the push stays past threshold. Only
-    // true again once the piece actually falls (a real OnPieceMoved), so a push yields exactly one
-    // rotation per fall step no matter how long it's held. (Left/right shifts are no longer handled
-    // here at all - they come from foot pedals via GameManager now.)
-    public bool CanRotateAgain { get; private set; } = true;
-
     void OnEnable()
     {
         gridManager.OnPieceSpawned += HandlePieceMoved;
         gridManager.OnPieceMoved += HandlePieceMoved;
-        gridManager.OnPieceRotated += HandlePieceRotated;
+        gridManager.OnLinesCleared += HandleLinesCleared;
     }
 
     void OnDisable()
     {
         gridManager.OnPieceSpawned -= HandlePieceMoved;
         gridManager.OnPieceMoved -= HandlePieceMoved;
-        gridManager.OnPieceRotated -= HandlePieceRotated;
+        gridManager.OnLinesCleared -= HandleLinesCleared;
     }
 
     void HandlePieceMoved(List<Vector2Int> cells)
     {
         int myVersion = ++traceVersion;
-        IsSettled = false;
-        CanRotateAgain = true;
         _ = RetraceShape(gridManager.GetPieceTraceWaypoints(), myVersion);
     }
 
-    // Rotating the piece's shape is only felt once the piece actually falls and the next full
-    // retrace picks up the new shape - no immediate retrace on rotation itself.
-    void HandlePieceRotated(List<Vector2Int> cells)
+    // After a line clear, sweep the it-handle across each cleared row so the player feels which
+    // line(s) went away, then return to tracing the (already-spawned) new piece. This fires right
+    // after the new piece's spawn retrace has started (see GridManager.LockPiece ordering), so the
+    // ++traceVersion cleanly supersedes it - the version guard in RetraceShape abandons the older
+    // one. Gravity is paused by GridManager for the duration (set in ClearFullLines) and released
+    // here once the trace finishes, so the new piece doesn't fall until the animation is done.
+    // (Skyline/stack-outline tracing is a separate future item, not included here.)
+    async void HandleLinesCleared(List<int> rows)
     {
-        CanRotateAgain = false;
+        int myVersion = ++traceVersion;
+        List<Vector2Int> waypoints = new List<Vector2Int>();
+        foreach (int row in rows)
+            for (int x = 0; x < gridManager.Width; x++)
+                waypoints.Add(new Vector2Int(x, row));
+        // Return to the current piece afterwards (empty if the spawn topped out into game over).
+        waypoints.AddRange(gridManager.GetPieceTraceWaypoints());
+
+        await RetraceShape(waypoints, myVersion);
+
+        // Only resume if this trace ran to completion and wasn't superseded by a newer one (a newer
+        // trace will resume in its own time / isn't a clear trace). GridManager also has a failsafe
+        // timeout so it can never stay paused forever.
+        if (myVersion == traceVersion) gridManager.ResumeFall();
     }
 
     // Abandons itself as soon as a newer move/spawn event arrives, so overlapping fall steps
@@ -93,14 +94,9 @@ public class PieceHandle : MonoBehaviour
                 // confirms the handle has physically arrived here (or a 3s toolkit-internal
                 // timeout) - this is the ONE time in the whole session this actually matters,
                 // since every later waypoint/piece is just a transform.position write that
-                // PantoHandle.FixedUpdate continuously re-sends once following (no arrival check
-                // needed or possible there). If this first distance is large (e.g. the handle is
-                // resting far from the very first piece's spawn cell), awaiting it properly keeps
-                // IsSettled false for that whole real travel time - without this await, the fixed
-                // per-waypoint delays below would finish (and IsSettled/PieceNudgeInput would
-                // unblock) long before the handle physically catches up, and the resulting
-                // real-vs-target gap gets misread as a deliberate push (random extra shifts/
-                // rotations while the first piece is still catching up).
+                // PantoHandle.FixedUpdate continuously re-sends once following. Awaiting the first
+                // arrival lets us do the speed re-assert and rotation hand-off below only once the
+                // firmware is genuinely ready (see those comments) instead of mid-transition.
                 await PantoSystem.Instance.FollowTarget(isUpper: false, gameObject, handleSpeed);
                 if (version != traceVersion) return;
 
@@ -113,12 +109,18 @@ public class PieceHandle : MonoBehaviour
                 // a per-step re-send floods the position stream with SendSpeed packets and drags
                 // the handle to the bottom edge (observed on hardware). No-op in debug mode.
                 PantoSystem.Instance.SetHandleSpeed(isUpper: false, handleSpeed);
+
+                // Decouple the it-handle's ROTATION from the position-follow. Otherwise the
+                // toolkit's per-frame re-send keeps commanding this target's eulerAngles.y as the
+                // handle's rotation (userControlledRotation stays false), and the it-handle's
+                // unstable rotation motor makes it intermittently spin wildly. We don't use the
+                // it-handle's rotation for anything, so free it - position stays held (relies on the
+                // toolkit fix that sends null rotation when userControlledRotation is true).
+                PantoSystem.Instance.FreeRotation(isUpper: false);
             }
 
             await Task.Delay(TimeSpan.FromSeconds(isFirst ? firstWaypointPauseSeconds : cellPauseSeconds));
             isFirst = false;
         }
-
-        if (version == traceVersion) IsSettled = true;
     }
 }

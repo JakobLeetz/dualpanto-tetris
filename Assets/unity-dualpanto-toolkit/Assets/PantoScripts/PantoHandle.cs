@@ -309,9 +309,15 @@ namespace DualPantoToolkit
                     SetPositions(position + (goalPos - position) * 0.05f, newRot, null);
                 }
             }
-            else if (handledGameObject != null && !inTransition && !isFrozen)// reached gameobject initially 
+            else if (handledGameObject != null && !inTransition && !isFrozen)// reached gameobject initially
             {
-                GetPantoSync().UpdateHandlePosition(handledGameObject.transform.position, handledGameObject.transform.eulerAngles.y, isUpper);
+                // Respect userControlledRotation, mirroring the debug branch above: when rotation
+                // has been freed (FreeRotation), send null rotation so the game keeps holding the
+                // handle's POSITION while the player can still turn it freely. Without this the
+                // hardware branch re-commanded the target's angle every frame and fought/overrode
+                // any manual rotation (the reason handle-rotation input failed before).
+                float? rot = userControlledRotation ? (float?)null : handledGameObject.transform.eulerAngles.y;
+                GetPantoSync().UpdateHandlePosition(handledGameObject.transform.position, rot, isUpper);
             }
         }
 

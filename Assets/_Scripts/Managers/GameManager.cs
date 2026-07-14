@@ -13,21 +13,50 @@ using UnityEngine;
 public class GameManager : Singleton<GameManager>
 {
     [SerializeField] GridManager gridManager;
+    [SerializeField] StackHandle stackHandle;
     [SerializeField] int gridWidth = 10;
     [SerializeField] int gridHeight = 20;
+    [Tooltip("Seconds to wait after load before the game can be started, so the device/handles are " +
+        "fully functional first (they take ~10s; starting earlier makes the first piece fall during " +
+        "loading). Starting is gated on this AND a right-pedal press.")]
+    [SerializeField] float startupDelaySeconds = 10f;
+    [Tooltip("Seconds after game over before the restart pedal is accepted, so a still-in-progress " +
+        "move press doesn't instantly restart (with GetKeyDown you then have to deliberately press " +
+        "again). Set higher to make it wait roughly until the game-over announcement is done.")]
+    [SerializeField] float restartInputDelaySeconds = 1.5f;
     [SerializeField] bool debugLogging = true;
+
+    enum GameState { WaitingToStart, Playing, GameOver }
+    GameState state = GameState.WaitingToStart;
+    float readyTime;
+    float restartReadyTime;
+    bool startPromptGiven;
 
     public int Score { get; private set; }
     public int LinesCleared { get; private set; }
     public int Level { get; private set; }
     public bool IsGameOver { get; private set; }
+    public GridManager Grid => gridManager;
+
+    // Fires when clearing lines pushes the level up (GridManager is level-agnostic, so this lives
+    // here). GameAudio listens for a level-up jingle.
+    public event System.Action OnLevelUp;
+
+    // Fires after a line clear once score/lines are updated: (linesClearedThisTime, totalScore).
+    // GameAudio uses it to announce the clear with the CURRENT score (order-independent, unlike
+    // reading Score from the raw GridManager.OnLinesCleared event).
+    public event System.Action<int, int> OnLinesScored;
+
+    // Fires when the right pedal is used to select "start" (from WaitingToStart) or "restart"
+    // (from GameOver). GameAudio plays a menu-select sound off this.
+    public event System.Action OnGameStarted;
 
     void Start()
     {
         gridManager.Initialize(gridWidth, gridHeight);
         gridManager.OnPieceMoved += HandlePieceMoved;
         gridManager.OnPieceRotated += HandlePieceMoved;
-        gridManager.OnPieceLocked += _ => SpawnRandomPiece();
+        gridManager.OnPieceLocked += HandlePieceLocked;
         gridManager.OnLinesCleared += HandleLinesCleared;
         gridManager.OnGameOver += HandleGameOver;
 
@@ -36,7 +65,18 @@ public class GameManager : Singleton<GameManager>
         // matters - registering too early can silently fail).
         PantoSystem.Instance.CreateBoxObstacle(gridManager.Frame.gameObject, onUpper: true, onLower: false);
         gridManager.SetFallFramesPerRow(FramesForLevel(Level));
-        SpawnRandomPiece();
+
+        // Do NOT spawn yet - wait for the startup delay (device ready) + a right-pedal press. Until
+        // then there's no piece, so nothing falls. See Update / StartGame.
+        readyTime = Time.time + startupDelaySeconds;
+        state = GameState.WaitingToStart;
+    }
+
+    // The lock that ends a piece spawns the next one; the spawn that can't fit fires OnGameOver.
+    // Guarded on Playing so a stray lock while not playing can't spawn.
+    void HandlePieceLocked(List<Vector2Int> cells)
+    {
+        if (state == GameState.Playing) SpawnRandomPiece();
     }
 
     void SpawnRandomPiece()
@@ -53,18 +93,23 @@ public class GameManager : Singleton<GameManager>
 
     void HandleLinesCleared(List<int> rows)
     {
+        int previousLevel = Level;
         Score += LineClearScore(rows.Count) * (Level + 1);
         LinesCleared += rows.Count;
         Level = LinesCleared / 10;
         gridManager.SetFallFramesPerRow(FramesForLevel(Level));
         Log($"Cleared {rows.Count} line(s) -> Score: {Score}, Lines: {LinesCleared}, Level: {Level}");
+        OnLinesScored?.Invoke(rows.Count, Score);
+        if (Level > previousLevel) OnLevelUp?.Invoke();
     }
 
     void HandleGameOver()
     {
         IsGameOver = true;
+        state = GameState.GameOver;
+        restartReadyTime = Time.time + restartInputDelaySeconds;
         Log($"Game Over. Score: {Score}, Lines: {LinesCleared}, Level: {Level}");
-        _ = SpeechSystem.Instance.Say($"Game Over. Score {Score}.");
+        Say($"Game over. Final score {Score}. Total lines {LinesCleared}. Push right pedal to restart.");
     }
 
     void Log(string message)
@@ -74,19 +119,72 @@ public class GameManager : Singleton<GameManager>
 
     void Update()
     {
-        if (IsGameOver) return;
+        switch (state)
+        {
+            case GameState.WaitingToStart:
+                if (Time.time >= readyTime)
+                {
+                    if (!startPromptGiven)
+                    {
+                        Say("Push right pedal to start game.");
+                        startPromptGiven = true;
+                    }
+                    if (StartOrRestartPressed()) StartGame();
+                }
+                break;
 
+            case GameState.Playing:
+                HandleGameplayInput();
+                break;
+
+            case GameState.GameOver:
+                if (Time.time >= restartReadyTime && StartOrRestartPressed()) RestartGame();
+                break;
+        }
+    }
+
+    // Right pedal (V). RightArrow kept as a keyboard fallback for testing without pedals.
+    static bool StartOrRestartPressed() =>
+        Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.RightArrow);
+
+    void HandleGameplayInput()
+    {
         // Left/right is driven by two foot pedals, each wired to emit a keycode: U = left, V =
-        // right. One move per press (GetKeyDown is edge-triggered), so no rate-limiting needed.
-        // Rotation still comes from nudging the it-handle (see PieceNudgeInput).
+        // right (edge-triggered, one move per press). Rotation comes from the keyboard up-arrow for
+        // now (handle-turn rotation is parked). Arrow keys are temporary test fallbacks.
         if (Input.GetKeyDown(KeyCode.U)) gridManager.TryMove(Vector2Int.left);
         if (Input.GetKeyDown(KeyCode.V)) gridManager.TryMove(Vector2Int.right);
-
-        // Temporary arrow-key fallbacks for testing without the pedals/device.
         if (Input.GetKeyDown(KeyCode.LeftArrow)) gridManager.TryMove(Vector2Int.left);
         if (Input.GetKeyDown(KeyCode.RightArrow)) gridManager.TryMove(Vector2Int.right);
         if (Input.GetKeyDown(KeyCode.UpArrow)) gridManager.TryRotate(1);
         if (Input.GetKey(KeyCode.DownArrow) && gridManager.SoftDrop()) Score += 1;
+    }
+
+    void StartGame()
+    {
+        state = GameState.Playing;
+        OnGameStarted?.Invoke();
+        if (stackHandle != null) _ = stackHandle.MoveToStartCorner();
+        SpawnRandomPiece();
+    }
+
+    void RestartGame()
+    {
+        gridManager.Reset();
+        Score = 0;
+        LinesCleared = 0;
+        Level = 0;
+        IsGameOver = false;
+        gridManager.SetFallFramesPerRow(FramesForLevel(Level));
+        state = GameState.Playing;
+        OnGameStarted?.Invoke();
+        if (stackHandle != null) _ = stackHandle.MoveToStartCorner();
+        SpawnRandomPiece();
+    }
+
+    void Say(string text)
+    {
+        if (SpeechSystem.Instance != null) _ = SpeechSystem.Instance.Say(text, interrupt: true);
     }
 
     // Classic NES scoring: base points per simultaneous line count, multiplied by (level + 1).

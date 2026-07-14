@@ -21,12 +21,20 @@ public class LockedBlocksView : MonoBehaviour
     {
         gridManager.OnPieceLocked += HandlePieceLocked;
         gridManager.OnLinesCleared += HandleLinesCleared;
+        gridManager.OnReset += ClearAll;
     }
 
     void OnDisable()
     {
         gridManager.OnPieceLocked -= HandlePieceLocked;
         gridManager.OnLinesCleared -= HandleLinesCleared;
+        gridManager.OnReset -= ClearAll;
+    }
+
+    void ClearAll()
+    {
+        foreach (GameObject block in blocks.Values) Destroy(block);
+        blocks.Clear();
     }
 
     void HandlePieceLocked(List<Vector2Int> cells)
