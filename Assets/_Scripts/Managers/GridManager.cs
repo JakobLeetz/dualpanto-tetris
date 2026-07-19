@@ -12,8 +12,20 @@ public class GridManager : MonoBehaviour
 {
     public enum CellState { Empty, Locked }
 
-    // Wall-kick offsets tried in order when a rotation doesn't fit in its target cell.
-    static readonly int[] RotationKicks = { 0, -1, 1, -2, 2 };
+    // Wall-kick offsets tried in order when a rotation doesn't fit in its target cell. Identity
+    // first (rotate in place), then horizontal nudges (left/right off a wall or block), then
+    // DOWNWARD nudges - the latter make Tetris-style top-edge rotation work: a piece flush against
+    // the top whose rotated form pokes above the field (only the I piece: its vertical form is 4
+    // tall) is pushed DOWN into the field instead of the rotation failing. y is up, so negative y
+    // = down; the I vertical needs up to (0,-2). Down+horizontal combos handle corners near the top.
+    static readonly Vector2Int[] RotationKicks =
+    {
+        new Vector2Int(0, 0),
+        new Vector2Int(-1, 0), new Vector2Int(1, 0),
+        new Vector2Int(-2, 0), new Vector2Int(2, 0),
+        new Vector2Int(0, -1), new Vector2Int(0, -2),
+        new Vector2Int(-1, -1), new Vector2Int(1, -1),
+    };
 
     // 4 rotation states per piece, standard tetromino cell offsets (x right, y up). Cells within
     // each state are ordered so consecutive cells are grid-adjacent wherever the shape's topology
@@ -136,8 +148,19 @@ public class GridManager : MonoBehaviour
     // i.e. the player tried to rotate but it's genuinely blocked. Not fired for TrySetRotation calls
     // that are no-ops because the target state already matches (that's not a "failed" attempt).
     public event Action OnRotationFailed;
+    // Fires when a pure left/right shift attempt is blocked (wall or a locked cell) - i.e. the
+    // player tried to move but it's genuinely blocked. Not fired for a blocked fall/soft-drop step
+    // (that's the piece landing, a normal outcome with its own OnPieceLocked event, not a failure).
+    public event Action OnShiftFailed;
     // Fires when the board is cleared for a restart, so views (locked blocks etc.) can wipe themselves.
     public event Action OnReset;
+    // Fires when the board is mutated directly (not via normal play) - locked cells added, or a
+    // resize - so views rebuild from GetLockedCells(). Used by the tutorial's pre-placed blocks.
+    public event Action OnBoardChanged;
+
+    // The cells the most recently locked piece occupied (set in LockPiece). Lets the tutorial check
+    // where the player actually placed a piece.
+    public List<Vector2Int> LastLockedPieceCells { get; private set; } = new List<Vector2Int>();
 
     public int Width { get; private set; }
     public int Height { get; private set; }
@@ -150,17 +173,66 @@ public class GridManager : MonoBehaviour
         Height = gridHeight;
         cells = new CellState[Width, Height];
         hasPiece = false;
+        DeriveGeometry();
 
+        Vector3 frameSize = Vector3.Scale(frame.size, frame.transform.lossyScale);
+        Debug.Log($"[GridManager] Initialize: frame={frame.gameObject.name} frame.transform.position={frame.transform.position} " +
+            $"frame.center={frame.center} frame.size={frame.size} frame.transform.lossyScale={frame.transform.lossyScale} " +
+            $"frameSize={frameSize} cellSize={cellSize} originWorld={originWorld}");
+    }
+
+    // Recomputes cellSize/originWorld from the (fixed physical) frame for the current Width/Height.
+    // Called by Initialize and Resize - a smaller grid gives larger cells, keeping the same footprint.
+    void DeriveGeometry()
+    {
         Vector3 frameSize = Vector3.Scale(frame.size, frame.transform.lossyScale);
         cellSize = Mathf.Min(frameSize.x / Width, frameSize.z / Height);
 
         Vector3 frameCenter = frame.transform.TransformPoint(frame.center);
         Vector3 gridExtent = new Vector3(Width * cellSize, 0f, Height * cellSize);
         originWorld = frameCenter - gridExtent / 2f + new Vector3(cellSize, 0f, cellSize) / 2f;
+    }
 
-        Debug.Log($"[GridManager] Initialize: frame={frame.gameObject.name} frame.transform.position={frame.transform.position} " +
-            $"frame.center={frame.center} frame.size={frame.size} frame.transform.lossyScale={frame.transform.lossyScale} " +
-            $"frameSize={frameSize} cellSize={cellSize} frameCenter={frameCenter} originWorld={originWorld}");
+    /// <summary>
+    /// Changes the grid to a new size at runtime (tutorial). Re-derives cellSize/origin from the
+    /// fixed frame, drops any piece, and fires OnReset so views wipe. The caller must also rebuild
+    /// anything grid-derived that isn't event-driven (StackHandle rails - see TutorialManager).
+    /// </summary>
+    public void Resize(int gridWidth, int gridHeight)
+    {
+        Width = gridWidth;
+        Height = gridHeight;
+        cells = new CellState[Width, Height];
+        hasPiece = false;
+        fallPaused = false;
+        fallTimer = 0f;
+        LastLockedPieceCells.Clear();
+        DeriveGeometry();
+        OnReset?.Invoke();
+    }
+
+    /// <summary>
+    /// Locks the given cells directly (not via a played piece) and refreshes views via
+    /// OnBoardChanged. Used by the tutorial to pre-place blocks. Cells outside the grid are ignored.
+    /// </summary>
+    public void AddLockedCells(IEnumerable<Vector2Int> cellsToLock)
+    {
+        foreach (Vector2Int cell in cellsToLock)
+            if (cell.x >= 0 && cell.x < Width && cell.y >= 0 && cell.y < Height)
+                cells[cell.x, cell.y] = CellState.Locked;
+        OnBoardChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Clears the given cells back to empty and refreshes views via OnBoardChanged. Used by the
+    /// tutorial to take back a piece the player placed badly.
+    /// </summary>
+    public void RemoveLockedCells(IEnumerable<Vector2Int> cellsToClear)
+    {
+        foreach (Vector2Int cell in cellsToClear)
+            if (cell.x >= 0 && cell.x < Width && cell.y >= 0 && cell.y < Height)
+                cells[cell.x, cell.y] = CellState.Empty;
+        OnBoardChanged?.Invoke();
     }
 
     /// <summary>Wipes the board back to an empty, piece-less state for a restart. Fires OnReset so
@@ -184,6 +256,11 @@ public class GridManager : MonoBehaviour
     public bool SpawnPiece(PieceType type)
     {
         Vector2Int[] shape = Shapes[type][0];
+        // Spawn flush against the top edge (like real Tetris). A piece whose rotated form is taller
+        // than its spawn form - only the I piece (1 row horizontal vs. 4 vertical) - would then poke
+        // above the field when rotated at the top; the DOWNWARD wall-kicks in RotationKicks push it
+        // back down into the field, so it stays rotatable at the top edge (replaces the old
+        // spawn-lower workaround).
         Vector2Int origin = new Vector2Int((Width - MaxX(shape)) / 2, Height - 1 - MaxY(shape));
 
         if (!IsValidPosition(origin, shape))
@@ -267,17 +344,26 @@ public class GridManager : MonoBehaviour
     public bool TryMove(Vector2Int direction)
     {
         if (!hasPiece) return false;
+        bool isShift = direction.y == 0 && direction.x != 0;
         Vector2Int newOrigin = pieceOrigin + direction;
-        if (!IsValidPosition(newOrigin, pieceShape)) return false;
+        if (!IsValidPosition(newOrigin, pieceShape))
+        {
+            if (isShift) OnShiftFailed?.Invoke();
+            return false;
+        }
         pieceOrigin = newOrigin;
 
-        if (direction.y == 0 && direction.x != 0) OnPieceShifted?.Invoke(direction);
+        if (isShift) OnPieceShifted?.Invoke(direction);
         else OnPieceMoved?.Invoke(GetPieceCells());
 
         return true;
     }
 
     public int CurrentRotation => currentRotation;
+
+    // Which tetromino is currently falling. Only meaningful while a piece exists (GetPieceCells()
+    // non-empty); the tutorial reads it on OnPieceSpawned to describe each shape the first time.
+    public PieceType CurrentPieceType => currentPieceType;
 
     public bool TryRotate(int direction)
     {
@@ -299,9 +385,9 @@ public class GridManager : MonoBehaviour
         if (targetRotation == currentRotation) return false;
         Vector2Int[] candidate = Shapes[currentPieceType][targetRotation];
 
-        foreach (int kick in RotationKicks)
+        foreach (Vector2Int kick in RotationKicks)
         {
-            Vector2Int candidateOrigin = pieceOrigin + new Vector2Int(kick, 0);
+            Vector2Int candidateOrigin = pieceOrigin + kick;
             if (IsValidPosition(candidateOrigin, candidate))
             {
                 pieceOrigin = candidateOrigin;
@@ -333,6 +419,7 @@ public class GridManager : MonoBehaviour
         {
             cells[cell.x, cell.y] = CellState.Locked;
         }
+        LastLockedPieceCells = lockedCells;
         OnPieceLocked?.Invoke(lockedCells);
         ClearFullLines();
     }
@@ -351,8 +438,13 @@ public class GridManager : MonoBehaviour
         }
         if (clearedRows.Count == 0) return;
 
-        foreach (int row in clearedRows)
+        // Collapse from the TOP row down. Going bottom-up would be wrong: removing a low row shifts
+        // every row above it down by one, so the next entry in clearedRows no longer points at the
+        // row it named (only one of two full rows actually got cleared). Descending order leaves the
+        // still-pending, lower indices untouched.
+        for (int i = clearedRows.Count - 1; i >= 0; i--)
         {
+            int row = clearedRows[i];
             for (int y = row; y < Height - 1; y++)
                 for (int x = 0; x < Width; x++)
                     cells[x, y] = cells[x, y + 1];
@@ -415,6 +507,20 @@ public class GridManager : MonoBehaviour
     {
         if (cell.x < 0 || cell.x >= Width || cell.y < 0 || cell.y >= Height) return false;
         return cells[cell.x, cell.y] == CellState.Locked;
+    }
+
+    /// <summary>
+    /// True if the cell holds a locked block OR is part of the current falling piece - i.e. any
+    /// cell where the player would feel a block. StackHandle uses this (not IsLocked) so the
+    /// occupied-cell step sound also fires when moving over the falling piece, not just the stack.
+    /// </summary>
+    public bool IsOccupied(Vector2Int cell)
+    {
+        if (IsLocked(cell)) return true;
+        if (!hasPiece) return false;
+        foreach (Vector2Int offset in pieceShape)
+            if (pieceOrigin + offset == cell) return true;
+        return false;
     }
 
     public List<Vector2Int> GetLockedCells()

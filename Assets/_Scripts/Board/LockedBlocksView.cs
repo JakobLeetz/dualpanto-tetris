@@ -22,6 +22,7 @@ public class LockedBlocksView : MonoBehaviour
         gridManager.OnPieceLocked += HandlePieceLocked;
         gridManager.OnLinesCleared += HandleLinesCleared;
         gridManager.OnReset += ClearAll;
+        gridManager.OnBoardChanged += RebuildFromBoard;
     }
 
     void OnDisable()
@@ -29,6 +30,7 @@ public class LockedBlocksView : MonoBehaviour
         gridManager.OnPieceLocked -= HandlePieceLocked;
         gridManager.OnLinesCleared -= HandleLinesCleared;
         gridManager.OnReset -= ClearAll;
+        gridManager.OnBoardChanged -= RebuildFromBoard;
     }
 
     void ClearAll()
@@ -45,7 +47,11 @@ public class LockedBlocksView : MonoBehaviour
         }
     }
 
-    void HandleLinesCleared(List<int> rows)
+    void HandleLinesCleared(List<int> rows) => RebuildFromBoard();
+
+    // Wipe and respawn every locked block from the grid's current state - after a line clear or a
+    // direct board mutation (tutorial pre-placed blocks / resize).
+    void RebuildFromBoard()
     {
         foreach (GameObject block in blocks.Values)
         {

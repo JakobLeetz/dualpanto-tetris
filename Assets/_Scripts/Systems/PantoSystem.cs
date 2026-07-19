@@ -22,7 +22,7 @@ public class PantoSystem : StaticInstance<PantoSystem>
     DualPantoSync sync;
     float readyAt;
     readonly List<Action> pendingObstacles = new List<Action>();
-    readonly List<PantoBoxCollider> allObstacles = new List<PantoBoxCollider>();
+    readonly List<PantoCollider> allObstacles = new List<PantoCollider>();
 
     // Mirrors PantoHandle.MaxMovementSpeed() (protected there) - the toolkit clamps every speed it
     // sends the firmware to this, so SetHandleSpeed does the same when re-sending directly.
@@ -45,12 +45,24 @@ public class PantoSystem : StaticInstance<PantoSystem>
 
     bool IsReady => Time.time >= readyAt;
 
+    /// <summary>
+    /// True once every queued obstacle create/remove has actually been sent to the device. Lets a
+    /// caller wait for e.g. wall REMOVALS to land before driving the handle through where they were
+    /// (the queue is staggered one op per frame, so removals aren't instant).
+    /// </summary>
+    public bool ObstacleQueueEmpty => pendingObstacles.Count == 0;
+
     void Update()
     {
+        // Flush the pending queue ONE entry per frame instead of all at once: sending many
+        // obstacle-creation packets in a single frame crashes the device (toolkit README FAQ
+        // "too many obstacles at once"; the toolkit's own ColliderRegistry/ColliderPolyline
+        // stagger with 10-20ms delays for the same reason - observed here as a connection loss
+        // when 28 wall obstacles were flushed in one frame).
         if (pendingObstacles.Count > 0 && IsReady)
         {
-            foreach (Action createAndEnable in pendingObstacles) createAndEnable();
-            pendingObstacles.Clear();
+            pendingObstacles[0]();
+            pendingObstacles.RemoveAt(0);
         }
 
         // E/D toggle all obstacles on/off at runtime, matching the toolkit's own Obstacle
@@ -62,7 +74,7 @@ public class PantoSystem : StaticInstance<PantoSystem>
 
     void SetAllObstaclesEnabled(bool enable)
     {
-        foreach (PantoBoxCollider obstacle in allObstacles)
+        foreach (PantoCollider obstacle in allObstacles)
         {
             if (obstacle == null) continue;
             if (enable) obstacle.Enable();
@@ -94,6 +106,19 @@ public class PantoSystem : StaticInstance<PantoSystem>
     }
 
     /// <summary>
+    /// Immediately ends the handle's "in transition" state after a FollowTarget/SwitchTo, so the
+    /// toolkit's continuous position-follow (PantoHandle.FixedUpdate) engages right away. SwitchTo
+    /// marks the handle inTransition and, on hardware, only clears it on a confirmed arrival report
+    /// or a ~3s "couldn't be reached" timeout - and while inTransition the continuous follow is
+    /// SUPPRESSED, so the handle sits still after its one initial command until the transition ends
+    /// (observed as ~5s of a dead handle at game start, since arrival is never reported for the
+    /// it-handle's first target here). Safe for our persistent-follow use: we don't need real
+    /// arrival - the continuous follow drives the handle to wherever the target transform currently
+    /// is every frame. Uses the toolkit's own public TweeningEnded (what a real arrival would call).
+    /// </summary>
+    public void MarkFollowReady(bool isUpper) => GetHandle(isUpper).TweeningEnded();
+
+    /// <summary>
     /// Re-sends the handle's movement speed to the firmware. The toolkit only ever sets speed once,
     /// inside SwitchTo - and since we call SwitchTo exactly once per session (persistent-target
     /// design), that single SetSpeed is a one-shot: if its packet races the firmware's motor-task
@@ -116,9 +141,10 @@ public class PantoSystem : StaticInstance<PantoSystem>
     public void FreezeHandle(bool isUpper) => GetHandle(isUpper).Freeze();
 
     /// <summary>
-    /// Moves the handle once to a world position, then frees it again (so a force-driven handle can
-    /// resume). Awaitable - completes when the move finishes. Used to place the stack handle inside
-    /// the field at game start.
+    /// Moves the handle once to a world position, then frees it again. Awaitable - completes when
+    /// the move finishes. Used to place the stack handle at its start cell; the handle must be
+    /// FREE afterwards so the firmware renders walls/rails for it (motor commands override the
+    /// god-object wall rendering per handle).
     /// </summary>
     public Task MoveHandleTo(bool isUpper, Vector3 position, float speed) =>
         GetHandle(isUpper).MoveToPosition(position, speed, shouldFreeHandle: true);
@@ -140,16 +166,11 @@ public class PantoSystem : StaticInstance<PantoSystem>
     /// </summary>
     public void RotateHandle(bool isUpper, float angleDegrees) => GetHandle(isUpper).Rotate(angleDegrees);
 
-    /// <summary>
-    /// Applies a continuous force to the handle (toolkit force mode). direction is normalized and
-    /// strength clamped to [0,1] by the toolkit, so passing a force vector as direction with its
-    /// magnitude as strength just caps the force at unit length. No-op in debug/emulator mode
-    /// (SendMotor only fires when !debug). Call every FixedUpdate while a force should be felt.
-    /// </summary>
-    public void ApplyForce(bool isUpper, Vector3 direction, float strength) =>
-        GetHandle(isUpper).ApplyForce(direction, strength);
-
-    public void StopApplyingForce(bool isUpper) => GetHandle(isUpper).StopApplyingForce();
+    // NOTE: no ApplyForce wrapper. Every Unity-side force field tried on the stack handle
+    // (spring/deadzone/hysteresis/corner-pull, and later speed-gated/faded variants) ran away or
+    // oscillated on hardware - a ~50Hz position-read/force-send loop has no stable damping here.
+    // The stack handle now uses firmware rail geometry only (see StackHandle). Force mode also
+    // overrides firmware wall/rail rendering per handle, so the two can't coexist anyway.
 
     /// <summary>
     /// Registers a box obstacle matching the GameObject's BoxCollider, so the stack handle can feel it.
@@ -168,16 +189,61 @@ public class PantoSystem : StaticInstance<PantoSystem>
             allObstacles.Add(obstacle);
         }
 
-        if (!IsReady) pendingObstacles.Add(CreateAndEnable);
-        else CreateAndEnable();
+        // Always queued (never immediate), so creation is staggered one obstacle per frame even
+        // for runtime rebuilds - see the flood note in Update.
+        pendingObstacles.Add(CreateAndEnable);
 
         return obstacle;
     }
 
-    public void RemoveObstacle(PantoBoxCollider obstacle)
+    /// <summary>
+    /// Registers one firmware-rendered haptic grid line between two world positions (XZ plane) -
+    /// a Rail barrier by default (see GridLineCollider.Kind). Creates its own GameObject (parented
+    /// under this system). Goes through the staggered pending queue like every other obstacle.
+    /// Used by StackHandle for the cell-boundary grid.
+    /// </summary>
+    public GridLineCollider CreateGridLine(Vector3 a, Vector3 b, GridLineCollider.Kind kind,
+        float railDisplacement, bool onUpper = true, bool onLower = false)
+    {
+        GameObject holder = new GameObject($"GridLine ({a.x:F1},{a.z:F1})-({b.x:F1},{b.z:F1})");
+        holder.transform.parent = transform;
+        GridLineCollider obstacle = holder.AddComponent<GridLineCollider>();
+        obstacle.onUpper = onUpper;
+        obstacle.onLower = onLower;
+        obstacle.kind = kind;
+        obstacle.railDisplacement = railDisplacement;
+        obstacle.start = new Vector2(a.x, a.z);
+        obstacle.end = new Vector2(b.x, b.z);
+
+        void CreateAndEnable()
+        {
+            if (obstacle == null) return; // destroyed before its turn (e.g. runtime rebuild)
+            obstacle.CreateObstacle();
+            obstacle.Enable();
+            allObstacles.Add(obstacle);
+        }
+        pendingObstacles.Add(CreateAndEnable);
+
+        return obstacle;
+    }
+
+    /// <summary>
+    /// Removes an obstacle from the device - QUEUED (one serial op per frame), so tearing down
+    /// many obstacles at once (runtime rebuild) can't flood the device either. The id/handle-index
+    /// are captured immediately, so the caller may Destroy the GameObject right away. Obstacles
+    /// that were never actually created on the device (id 0 - e.g. still pending, or debug mode)
+    /// are skipped.
+    /// </summary>
+    public void RemoveObstacle(PantoCollider obstacle)
     {
         if (obstacle == null) return;
-        obstacle.Remove();
         allObstacles.Remove(obstacle);
+
+        ushort id = obstacle.GetId();
+        if (id == 0) return;
+        // Mirror of PantoCollider.getPantoIndex (protected there): upper-only = 0, lower-only = 1,
+        // both = 0xff.
+        byte index = obstacle.onUpper && obstacle.onLower ? (byte)0xff : obstacle.onUpper ? (byte)0 : (byte)1;
+        pendingObstacles.Add(() => sync.RemoveObstacle(index, id));
     }
 }

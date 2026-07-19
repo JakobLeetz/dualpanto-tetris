@@ -53,7 +53,7 @@ public class SpeechSystem : StaticInstance<SpeechSystem>
         if (string.IsNullOrEmpty(text)) return Task.CompletedTask;
         if (interrupt)
         {
-            while (queue.Count > 0) queue.Dequeue().Done.TrySetResult(false);
+            DrainQueue();
             speechOut?.Stop(false); // kill the current utterance only, keep the source usable
         }
         Utterance u = new Utterance { Text = text, Done = new TaskCompletionSource<bool>() };
@@ -85,10 +85,34 @@ public class SpeechSystem : StaticInstance<SpeechSystem>
     public void SetLanguage(SpeechBase.LANGUAGE lang) => language = lang;
     public void SetSpeed(float value) => speed = value;
 
+    /// <summary>
+    /// Drops everything queued and cuts off the current utterance, but keeps the speech source
+    /// USABLE - the next Say speaks normally. This is what you want to abandon an announcement
+    /// mid-flight (e.g. the tutorial's dev skip key).
+    /// </summary>
+    public void StopSpeaking()
+    {
+        DrainQueue();
+        speechOut?.Stop(false); // current utterance only - see Stop() for why the default is fatal
+    }
+
+    /// <summary>
+    /// Shutdown only. SpeechOut.Stop() defaults to stopAll: true, which calls source.Cancel() on its
+    /// CancellationTokenSource - permanently. Every later Speak then sees IsCancellationRequested and
+    /// returns without saying anything, i.e. TTS is dead for the rest of the session. Use
+    /// StopSpeaking() for anything that isn't quitting.
+    /// </summary>
     public void Stop()
     {
-        queue.Clear();
+        DrainQueue();
         speechOut?.Stop();
+    }
+
+    // Completes the dropped utterances instead of just clearing them - a caller awaiting one would
+    // otherwise wait forever on a task nothing can ever complete.
+    void DrainQueue()
+    {
+        while (queue.Count > 0) queue.Dequeue().Done.TrySetResult(false);
     }
 
     protected override void OnApplicationQuit()

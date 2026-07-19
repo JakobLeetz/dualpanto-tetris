@@ -14,8 +14,10 @@ public class GameManager : Singleton<GameManager>
 {
     [SerializeField] GridManager gridManager;
     [SerializeField] StackHandle stackHandle;
-    [SerializeField] int gridWidth = 10;
-    [SerializeField] int gridHeight = 20;
+    [SerializeField] PieceHandle pieceHandle;
+    [SerializeField] TutorialManager tutorialManager;
+    [SerializeField] int gridWidth = 8;
+    [SerializeField] int gridHeight = 16;
     [Tooltip("Seconds to wait after load before the game can be started, so the device/handles are " +
         "fully functional first (they take ~10s; starting earlier makes the first piece fall during " +
         "loading). Starting is gated on this AND a right-pedal press.")]
@@ -26,7 +28,7 @@ public class GameManager : Singleton<GameManager>
     [SerializeField] float restartInputDelaySeconds = 1.5f;
     [SerializeField] bool debugLogging = true;
 
-    enum GameState { WaitingToStart, Playing, GameOver }
+    enum GameState { WaitingToStart, Playing, GameOver, Tutorial }
     GameState state = GameState.WaitingToStart;
     float readyTime;
     float restartReadyTime;
@@ -37,6 +39,24 @@ public class GameManager : Singleton<GameManager>
     public int Level { get; private set; }
     public bool IsGameOver { get; private set; }
     public GridManager Grid => gridManager;
+
+    // Tutorial hooks (also usable by free-play; defaults preserve normal behaviour):
+    // Provides the next piece type - null = uniform random over all 7 (free-play). The tutorial
+    // sets this to restrict/script which pieces spawn.
+    public System.Func<PieceType> PieceSource;
+    // When false, locking a piece does NOT auto-spawn the next one - the tutorial spawns manually
+    // during scripted steps.
+    public bool AutoSpawn = true;
+    // When false, line clears don't award score / advance level - the tutorial enables scoring only
+    // from its scoring level onward. GameAudio also omits the score from its spoken line-clear
+    // announcement while this is false.
+    public bool ScoringEnabled = true;
+    // When false, GameAudio plays the line-clear SFX but does NOT announce it - lets the tutorial
+    // replace a scripted clear's announcement with its own line (e.g. the first two lines).
+    public bool AnnounceLineClears = true;
+    // When false, gameplay input is ignored entirely - for tutorial steps that DEMONSTRATE a drop
+    // the player must not be able to influence.
+    public bool InputEnabled = true;
 
     // Fires when clearing lines pushes the level up (GridManager is level-agnostic, so this lives
     // here). GameAudio listens for a level-up jingle.
@@ -51,6 +71,10 @@ public class GameManager : Singleton<GameManager>
     // (from GameOver). GameAudio plays a menu-select sound off this.
     public event System.Action OnGameStarted;
 
+    // Fires when a left/right press was swallowed because the it-handle is mid-trace (see
+    // HandleGameplayInput). The tutorial explains that rule the first time it happens.
+    public event System.Action OnMoveBlockedByTrace;
+
     void Start()
     {
         gridManager.Initialize(gridWidth, gridHeight);
@@ -60,10 +84,10 @@ public class GameManager : Singleton<GameManager>
         gridManager.OnLinesCleared += HandleLinesCleared;
         gridManager.OnGameOver += HandleGameOver;
 
-        // PantoSystem.CreateBoxObstacle defers registration itself if the device/sync isn't
-        // ready yet, so no delay needed here (see toolkit README troubleshooting for why that
-        // matters - registering too early can silently fail).
-        PantoSystem.Instance.CreateBoxObstacle(gridManager.Frame.gameObject, onUpper: true, onLower: false);
+        // NOTE: the field frame is an upper-handle-only wall and is registered by StackHandle, not
+        // here - it must stay DOWN until the stack handle has driven to its start position (it
+        // starts outside the field, so with the frame up it can never get in). See
+        // StackHandle.BuildGates / TearDownGates.
         gridManager.SetFallFramesPerRow(FramesForLevel(Level));
 
         // Do NOT spawn yet - wait for the startup delay (device ready) + a right-pedal press. Until
@@ -73,18 +97,41 @@ public class GameManager : Singleton<GameManager>
     }
 
     // The lock that ends a piece spawns the next one; the spawn that can't fit fires OnGameOver.
-    // Guarded on Playing so a stray lock while not playing can't spawn.
+    // Guarded on Playing/Tutorial + AutoSpawn so a stray lock (or a scripted tutorial step that
+    // spawns manually) doesn't double-spawn.
     void HandlePieceLocked(List<Vector2Int> cells)
     {
-        if (state == GameState.Playing) SpawnRandomPiece();
+        if (AutoSpawn && (state == GameState.Playing || state == GameState.Tutorial)) SpawnNextPiece();
     }
 
-    void SpawnRandomPiece()
+    // Spawns the next piece using PieceSource (tutorial-controlled) or uniform random (free-play).
+    public bool SpawnNextPiece()
     {
-        PieceType type = (PieceType)Random.Range(0, 7);
-        gridManager.SpawnPiece(type);
+        PieceType type = PieceSource != null ? PieceSource() : (PieceType)Random.Range(0, 7);
+        bool ok = gridManager.SpawnPiece(type);
         Log($"Spawned {type}");
+        return ok;
     }
+
+    // Spawns a specific piece type immediately (tutorial scripted steps).
+    public bool SpawnPiece(PieceType type) => gridManager.SpawnPiece(type);
+
+    /// <summary>
+    /// Zeroes score and line count. Used by the tutorial when it introduces scoring, so "cleared
+    /// lines score points" genuinely starts from zero rather than from whatever the practice levels
+    /// happened to accumulate.
+    /// </summary>
+    public void ResetScore()
+    {
+        Score = 0;
+        LinesCleared = 0;
+    }
+
+    /// <summary>
+    /// Restores the normal fall speed for the current level. The tutorial speeds gravity up for its
+    /// demo drop and calls this to put it back, instead of duplicating the level-0 constant.
+    /// </summary>
+    public void ApplyNormalFallSpeed() => gridManager.SetFallFramesPerRow(FramesForLevel(Level));
 
     void HandlePieceMoved(List<Vector2Int> cells)
     {
@@ -93,18 +140,39 @@ public class GameManager : Singleton<GameManager>
 
     void HandleLinesCleared(List<int> rows)
     {
-        int previousLevel = Level;
-        Score += LineClearScore(rows.Count) * (Level + 1);
-        LinesCleared += rows.Count;
-        Level = LinesCleared / 10;
-        gridManager.SetFallFramesPerRow(FramesForLevel(Level));
-        Log($"Cleared {rows.Count} line(s) -> Score: {Score}, Lines: {LinesCleared}, Level: {Level}");
+        // Scoring/level progression is gated so the tutorial can introduce it only from its
+        // scoring level onward; the line-clear SFX/announcement still fire either way via OnLinesScored.
+        if (ScoringEnabled)
+        {
+            Score += LineClearScore(rows.Count) * (Level + 1);
+            LinesCleared += rows.Count;
+            Log($"Cleared {rows.Count} line(s) -> Score: {Score}, Lines: {LinesCleared}");
+
+            // Level progression and its fall-speed increase are DISABLED for now (user request):
+            // free play stays at level 0 speed, so Level never leaves 0 and OnLevelUp never fires
+            // (GameAudio's level-up sound/"Reached level X" stay silent). To restore, put back:
+            //   int previousLevel = Level;
+            //   Level = LinesCleared / 10;
+            //   gridManager.SetFallFramesPerRow(FramesForLevel(Level));
+            //   if (Level > previousLevel) OnLevelUp?.Invoke();
+        }
+        else
+        {
+            Log($"Cleared {rows.Count} line(s) (scoring disabled)");
+        }
         OnLinesScored?.Invoke(rows.Count, Score);
-        if (Level > previousLevel) OnLevelUp?.Invoke();
     }
 
     void HandleGameOver()
     {
+        // During the tutorial a top-out must not trigger the real game-over screen - the tutorial
+        // quietly clears the board and continues.
+        if (state == GameState.Tutorial)
+        {
+            if (tutorialManager != null) tutorialManager.HandleTopOut();
+            return;
+        }
+
         IsGameOver = true;
         state = GameState.GameOver;
         restartReadyTime = Time.time + restartInputDelaySeconds;
@@ -126,15 +194,20 @@ public class GameManager : Singleton<GameManager>
                 {
                     if (!startPromptGiven)
                     {
-                        Say("Push right pedal to start game.");
+                        Say("Welcome to Pantris. Press the left pedal for the introduction, or the right pedal for free play.");
                         startPromptGiven = true;
                     }
-                    if (StartOrRestartPressed()) StartGame();
+                    if (LeftPedalPressed()) StartTutorial();
+                    else if (StartOrRestartPressed()) StartGame();
                 }
                 break;
 
             case GameState.Playing:
                 HandleGameplayInput();
+                break;
+
+            case GameState.Tutorial:
+                HandleGameplayInput(); // the tutorial controls spawning/scoring; input stays live
                 break;
 
             case GameState.GameOver:
@@ -143,21 +216,45 @@ public class GameManager : Singleton<GameManager>
         }
     }
 
-    // Right pedal (V). RightArrow kept as a keyboard fallback for testing without pedals.
+    // Right pedal (C). RightArrow kept as a keyboard fallback for testing without pedals.
     static bool StartOrRestartPressed() =>
-        Input.GetKeyDown(KeyCode.V) || Input.GetKeyDown(KeyCode.RightArrow);
+        Input.GetKeyDown(KeyCode.C) || Input.GetKeyDown(KeyCode.RightArrow);
+
+    // Left pedal (A). LeftArrow kept as a keyboard fallback.
+    static bool LeftPedalPressed() =>
+        Input.GetKeyDown(KeyCode.A) || Input.GetKeyDown(KeyCode.LeftArrow);
 
     void HandleGameplayInput()
     {
-        // Left/right is driven by two foot pedals, each wired to emit a keycode: U = left, V =
-        // right (edge-triggered, one move per press). Rotation comes from the keyboard up-arrow for
-        // now (handle-turn rotation is parked). Arrow keys are temporary test fallbacks.
-        if (Input.GetKeyDown(KeyCode.U)) gridManager.TryMove(Vector2Int.left);
-        if (Input.GetKeyDown(KeyCode.V)) gridManager.TryMove(Vector2Int.right);
-        if (Input.GetKeyDown(KeyCode.LeftArrow)) gridManager.TryMove(Vector2Int.left);
-        if (Input.GetKeyDown(KeyCode.RightArrow)) gridManager.TryMove(Vector2Int.right);
-        if (Input.GetKeyDown(KeyCode.UpArrow)) gridManager.TryRotate(1);
-        if (Input.GetKey(KeyCode.DownArrow) && gridManager.SoftDrop()) Score += 1;
+        // The tutorial switches this off while it demonstrates a drop the player is NOT meant to
+        // influence (see TutorialManager's level 4 "oopsie").
+        if (!InputEnabled) return;
+
+        // Left/right/rotation are driven by three foot pedals, each wired to emit a keycode:
+        // A = left, C = right, B = rotate a quarter turn clockwise (edge-triggered, one action per
+        // press). Arrow keys are temporary test fallbacks.
+        // ALL THREE are blocked while the it-handle is mid-retrace (e.g. tracing a fall step or the
+        // cleared-line sweep): acting then would fight the in-progress waypoint stepping, and for a
+        // rotation it would also move the handle onto a shape it is still in the middle of drawing.
+        bool left = Input.GetKeyDown(KeyCode.A) || Input.GetKeyDown(KeyCode.LeftArrow);
+        bool right = Input.GetKeyDown(KeyCode.C) || Input.GetKeyDown(KeyCode.RightArrow);
+        bool rotate = Input.GetKeyDown(KeyCode.B) || Input.GetKeyDown(KeyCode.UpArrow);
+        if (pieceHandle != null && pieceHandle.IsTracing)
+        {
+            // The press is swallowed - announce it so it isn't just silence (the tutorial explains
+            // the rule the first time this happens).
+            if (left || right || rotate) OnMoveBlockedByTrace?.Invoke();
+        }
+        else
+        {
+            if (left) gridManager.TryMove(Vector2Int.left);
+            if (right) gridManager.TryMove(Vector2Int.right);
+            if (rotate) gridManager.TryRotate(1);
+        }
+        // Gated like the line-clear score, so the tutorial can't quietly accumulate points before it
+        // has introduced scoring. (No pedal is bound to soft drop today, so this only bites once one
+        // is - which is exactly when it would be hard to track down.)
+        if (Input.GetKey(KeyCode.DownArrow) && gridManager.SoftDrop() && ScoringEnabled) Score += 1;
     }
 
     void StartGame()
@@ -165,7 +262,8 @@ public class GameManager : Singleton<GameManager>
         state = GameState.Playing;
         OnGameStarted?.Invoke();
         if (stackHandle != null) _ = stackHandle.MoveToStartCorner();
-        SpawnRandomPiece();
+        if (pieceHandle != null) pieceHandle.RequestStartHold();
+        SpawnNextPiece();
     }
 
     void RestartGame()
@@ -175,11 +273,44 @@ public class GameManager : Singleton<GameManager>
         LinesCleared = 0;
         Level = 0;
         IsGameOver = false;
+        PieceSource = null;
+        AutoSpawn = true;
+        ScoringEnabled = true;
+        AnnounceLineClears = true;
+        InputEnabled = true;
         gridManager.SetFallFramesPerRow(FramesForLevel(Level));
         state = GameState.Playing;
         OnGameStarted?.Invoke();
         if (stackHandle != null) _ = stackHandle.MoveToStartCorner();
-        SpawnRandomPiece();
+        if (pieceHandle != null) pieceHandle.RequestStartHold();
+        SpawnNextPiece();
+    }
+
+    // Left pedal from the start menu: hand off to the tutorial (falls back to free play if no
+    // TutorialManager is wired). The tutorial owns its own resize/positioning/spawn flow.
+    void StartTutorial()
+    {
+        if (tutorialManager == null) { StartGame(); return; }
+        state = GameState.Tutorial;
+        OnGameStarted?.Invoke(); // menu-select sound
+        tutorialManager.Begin();
+    }
+
+    /// <summary>
+    /// Called by the TutorialManager when the introduction finishes: switches to normal free play on
+    /// the CURRENT grid (the tutorial has already resized+positioned it). Resets the tutorial hooks.
+    /// </summary>
+    public void EnterFreePlayFromTutorial()
+    {
+        PieceSource = null;
+        AutoSpawn = true;
+        ScoringEnabled = true;
+        AnnounceLineClears = true;
+        InputEnabled = true;
+        gridManager.SetFallFramesPerRow(FramesForLevel(Level)); // level 0 speed (Level never advances)
+        state = GameState.Playing;
+        if (pieceHandle != null) pieceHandle.RequestStartHold();
+        SpawnNextPiece();
     }
 
     void Say(string text)
@@ -187,13 +318,17 @@ public class GameManager : Singleton<GameManager>
         if (SpeechSystem.Instance != null) _ = SpeechSystem.Instance.Say(text, interrupt: true);
     }
 
-    // Classic NES scoring: base points per simultaneous line count, multiplied by (level + 1).
+    // Modern-guideline scoring, multiplied by (level + 1). Chosen over the classic NES values
+    // (40/100/300/1200) for two reasons specific to this game: the score is SPOKEN, so round hundreds
+    // read far better than sums like 1340; and NES's 30x tetris bonus assumes a 10-wide field, while
+    // clearing four rows here only takes 32 cells, so 8x rewards it without making every other way of
+    // playing pointless.
     static int LineClearScore(int lineCount) => lineCount switch
     {
-        1 => 40,
-        2 => 100,
-        3 => 300,
-        4 => 1200,
+        1 => 100,
+        2 => 300,
+        3 => 500,
+        4 => 800,
         _ => 0,
     };
 

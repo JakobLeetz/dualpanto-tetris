@@ -17,7 +17,7 @@ public class Vis : MonoBehaviour
 
     void Update()
     {
-        if (Input.GetKeyDown(KeyCode.B))
+        if (Input.GetKeyDown(KeyCode.N))
         {
             current++;
             if (current > 2) current = 0;

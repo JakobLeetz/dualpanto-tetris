@@ -337,6 +337,7 @@ GameObject:
   - component: {fileID: 874714684}
   - component: {fileID: 874714686}
   - component: {fileID: 874714687}
+  - component: {fileID: 874714688}
   m_Layer: 0
   m_Name: Manager
   m_TagString: Untagged
@@ -357,12 +358,18 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameManager
   gridManager: {fileID: 874714686}
-  stackHandle: {fileID: 0}
-  gridWidth: 10
-  gridHeight: 20
-  startupDelaySeconds: 0
+  stackHandle: {fileID: 1049858929}
+  pieceHandle: {fileID: 1617433926}
+  tutorialManager: {fileID: 874714688}
+  gridWidth: 8
+  gridHeight: 16
+  startupDelaySeconds: 3
   restartInputDelaySeconds: 5
   debugLogging: 1
+  AutoSpawn: 1
+  ScoringEnabled: 1
+  AnnounceLineClears: 1
+  InputEnabled: 1
 --- !u!4 &874714685
 Transform:
   m_ObjectHideFlags: 0
@@ -425,12 +432,42 @@ MonoBehaviour:
   - name: menu
     clip: {fileID: 8300000, guid: c846f567a50ce4aef9d64e0b776f701e, type: 3}
     volume: 1
-  - name: failedRotate
+  - name: fail
     clip: {fileID: 8300000, guid: 5b8e985264b534e68be37871c172b516, type: 3}
     volume: 1
   - name: pieceLanded
     clip: {fileID: 8300000, guid: a399c9b3733714b4897bfe78d7479829, type: 3}
     volume: 1
+  - name: stackStepEmpty
+    clip: {fileID: 8300000, guid: e2d76904a81d14fc093808cfc52c7d39, type: 3}
+    volume: 1
+  - name: stackStepOccupied
+    clip: {fileID: 8300000, guid: fdd54ed4aa8494c1ca4b39996fbc417b, type: 3}
+    volume: 1
+--- !u!114 &874714688
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 874714683}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4e095ccbda6c9489caf59f0831431cf0, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TutorialManager
+  gridManager: {fileID: 874714686}
+  pieceHandle: {fileID: 1617433926}
+  stackHandle: {fileID: 1049858929}
+  standardWidth: 8
+  standardHeight: 16
+  reminderSeconds: 10
+  maxRetries: 4
+  preTraceHoldSeconds: 1.5
+  continuePromptRepeatSeconds: 20
+  stackStepEmptySound: stackStepEmpty
+  stackStepOccupiedSound: stackStepOccupied
+  skipLevelKey: 112
 --- !u!1 &1049858927
 GameObject:
   m_ObjectHideFlags: 0
@@ -478,15 +515,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::StackHandle
   gridManager: {fileID: 874714686}
-  pullStrength: 0.18
-  centerDeadzone: 0.15
-  cellHysteresis: 0.1
-  cornerPullStrength: 0.4
-  cornerThreshold: 0.25
-  cornerSharpness: 3
-  buzzStrength: 0.18
-  buzzFrequency: 20
+  railDisplacementCells: 0.2
+  railBothSides: 1
+  cellSwitchHysteresisCells: 0.2
+  edgePushMarginCells: 0.2
   moveToStartSpeed: 15
+  moveToStartTimeoutSeconds: 4
+  settleAfterMoveSeconds: 0.3
   debugLogging: 1
 --- !u!135 &1049858930
 SphereCollider:
@@ -631,13 +666,20 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::GameAudio
   gridManager: {fileID: 874714686}
   gameManager: {fileID: 874714684}
+  stackHandle: {fileID: 1049858929}
   moveSound: movePiece
   rotateSound: rotatePiece
   lineClearSound: lineClear
   tetrisSound: tetris
   levelUpSound: levelUp
   gameOverSound: gameOver
+  menuSound: menu
+  failSound: fail
+  pieceLandedSound: pieceLanded
+  stackStepEmptySound: stackStepEmpty
+  stackStepOccupiedSound: stackStepOccupied
   announceLineClear: 1
+  announceLevelUp: 1
 --- !u!4 &1424348134
 Transform:
   m_ObjectHideFlags: 0
@@ -783,9 +825,16 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PieceCursor
   gridManager: {fileID: 874714686}
-  handleSpeed: 50
-  cellPauseSeconds: 0.35
+  handleSpeed: 60
+  glideSeconds: 0.1
+  cellPauseSeconds: 0.3
+  lineClearGlideSeconds: 0.5
+  lineClearPauseSeconds: 0.3
+  relocateGlideSeconds: 0.07
+  relocatePauseSeconds: 0.15
   firstWaypointPauseSeconds: 0.6
+  firstFollowSetupDelaySeconds: 0.3
+  startHoldSeconds: 2
 --- !u!1 &1649454047
 GameObject:
   m_ObjectHideFlags: 0
