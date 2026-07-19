@@ -361,8 +361,8 @@ MonoBehaviour:
   stackHandle: {fileID: 1049858929}
   pieceHandle: {fileID: 1617433926}
   tutorialManager: {fileID: 874714688}
-  gridWidth: 8
-  gridHeight: 16
+  gridWidth: 6
+  gridHeight: 12
   startupDelaySeconds: 3
   restartInputDelaySeconds: 5
   debugLogging: 1
@@ -459,8 +459,6 @@ MonoBehaviour:
   gridManager: {fileID: 874714686}
   pieceHandle: {fileID: 1617433926}
   stackHandle: {fileID: 1049858929}
-  standardWidth: 8
-  standardHeight: 16
   reminderSeconds: 10
   maxRetries: 4
   preTraceHoldSeconds: 1.5
@@ -515,10 +513,14 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::StackHandle
   gridManager: {fileID: 874714686}
-  railDisplacementCells: 0.2
-  railBothSides: 1
-  cellSwitchHysteresisCells: 0.2
-  edgePushMarginCells: 0.2
+  pullStrength: 0.14
+  centerDeadzone: 0.3
+  cellHysteresis: 0.1
+  cornerPullStrength: 0.4
+  cornerThreshold: 0.25
+  cornerSharpness: 3
+  edgePushTriggerCells: 0
+  edgePushRearmCells: 0.1
   moveToStartSpeed: 15
   moveToStartTimeoutSeconds: 4
   settleAfterMoveSeconds: 0.3

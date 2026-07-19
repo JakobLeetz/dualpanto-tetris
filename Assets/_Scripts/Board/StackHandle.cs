@@ -1,55 +1,80 @@
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 using DualPantoToolkit;
 using UnityEngine;
 
 /// <summary>
-/// Stack handle (Me/Upper): cell navigation via a FIRMWARE-rendered grid of RAIL lines on the
-/// inner cell BOUNDARIES (GridLineCollider, upper handle only). A firmware rail acts as a soft
-/// BARRIER (hardware-verified): the handle moves FREELY within a cell and feels resistance when
-/// crossing a boundary into the next cell. The handle stays completely FREE - no Unity-side force
-/// or servo (every such attempt ran away or oscillated on this device; see project memory for the
-/// full history). This is the most stable variant found and the one chosen to ship.
+/// Stack handle (Me/Upper): the "magnetic grid" feel, driven by a Unity-side FORCE FIELD. This is a
+/// deliberate RETURN to the implementation as it stood BEFORE the first big stack-handle rework
+/// (commit 3d1deb7), chosen by the user over both the firmware boundary-rail version that replaced
+/// it (stable, but the cells could not really be felt) and the simpler original spring (d1c4388).
 ///
-/// Free movement within a cell is accepted (not a hard per-cell lock): the boundary rails give a
-/// felt bump per crossing, and cell changes fire OnCellChanged(cell, locked) so GameAudio plays a
-/// per-step click (dull = empty cell, higher = occupied cell = locked stack OR the falling
-/// piece). Cell changes use hysteresis
-/// (cellSwitchHysteresisCells) so the click fires once the handle has really popped through into
-/// the next cell, not the instant it touches the boundary line. No buzz on stacked cells (would
-/// need force mode, which overrides the rail rendering).
+/// Three parts, all tuned independently:
+///  - a flat centre DEADZONE with no force, so a let-go handle coasts to rest on the mechanism's own
+///    friction instead of being sprung around the centre. Sized (>= 0.5 - cellHysteresis) so that
+///    right after a cell switch the handle is already inside the new cell's deadzone - otherwise the
+///    switch drops it half a cell from the new centre where the pull is strongest and yanks it
+///    across, overshooting;
+///  - an edge DETENT: the pull ramps from 0 at the deadzone edge up to pullStrength at the cell
+///    boundary, so it resists leaving a cell rather than acting as a strong central spring;
+///  - a CORNER PULL: an extra, independently tuned force that grows as the handle nears a corner, to
+///    fight diagonal crossings.
+/// On top, the target cell uses hysteresis and steps CARDINALLY (one cell along whichever axis moved
+/// furthest, never diagonally to a corner cell in one go), so the force never flips while the handle
+/// rests on a boundary.
 ///
-/// Pushing outward against the frame from an edge cell fires OnEdgePush (-> GameAudio fail sound),
-/// edge-triggered past a margin so a light touch doesn't retrigger.
+/// Deliberately NO Unity-side velocity term anywhere: every attempt at one amplified sensor noise
+/// and made the behaviour worse.
 ///
-/// The rails are only put up AFTER the handle has been driven to its start position, and are taken
-/// down again before any such move (see MoveToStartCorner / TearDownGates) - with walls already in
-/// place the handle collides with them on the way and never reaches the corner.
+/// Two consequences of force mode that are easy to forget:
+///  - it OVERRIDES firmware wall rendering on this handle, so while force is being sent the outer
+///    frame is not felt as a hard wall. The frame obstacle is still registered (it is this
+///    component's, GameManager does not create one) and is what the emulator raycast clamps
+///    against, but on hardware the edge is communicated by OnEdgePush -> fail sound instead;
+///  - it is hardware-only. PantoSystem.ApplyForce is a no-op in debug/emulator mode, where the
+///    handle is mouse-driven and this component only tracks position.
 ///
-/// All geometry is uploaded once through PantoSystem's staggered queue (one obstacle per frame),
-/// so the serial channel is quiet during play (dynamic streaming disturbed the it-handle's
-/// position stream). The rail visuals also carry no colliders, so the emulator raycast is
-/// unaffected (rail FORCES are hardware-only).
+/// Occupancy is NOT expressed as force (the old locked-cell buzz was removed on request): cell
+/// changes fire OnCellChanged(cell, occupied) and GameAudio plays the per-step click off it (dull =
+/// empty, higher = locked stack OR the falling piece). Reaching the field border fires OnEdgePush.
+/// The force field is purely about grid navigation.
+///
+/// The frame obstacle is taken DOWN before any positioning move and put back up on arrival - with
+/// it up the handle (which starts outside the field) collides with it and never gets in.
 /// </summary>
 public class StackHandle : MonoBehaviour
 {
     [SerializeField] GridManager gridManager;
 
-    [Tooltip("Rail barrier band width as a fraction of a cell (crossing resistance).")]
-    [SerializeField] float railDisplacementCells = 0.15f;
-    [Tooltip("Create every rail twice, once per direction (a single firmware rail acts on one " +
-        "side of its line only).")]
-    [SerializeField] bool railBothSides = true;
-    [Tooltip("Extra distance PAST a cell boundary (fraction of a cell) the handle must move " +
-        "before the cell change registers - so the step sound fires once you've really popped " +
-        "through the rail into the next cell, not the instant you touch the boundary line.")]
-    [SerializeField] float cellSwitchHysteresisCells = 0.2f;
-    [Tooltip("In an edge cell, how far past the field boundary (fraction of a cell) the handle " +
-        "must be pushed against the frame wall before the fail sound fires - so a light touch " +
-        "doesn't trigger it. Fires once per push (re-arms when eased back inside). Hardware-only " +
-        "(needs pushing physically past the wall - tune to the device's wall compliance).")]
-    [SerializeField] float edgePushMarginCells = 0.2f;
+    [Header("Magnetic grid force")]
+    [Tooltip("Max pull, as a [0,1] force (clamped to unit length). Only acts in the ring between " +
+        "centerDeadzone and the cell boundary, so keep it modest.")]
+    [SerializeField] float pullStrength = 0.2f;
+    [Tooltip("Fraction of a cell (from the centre) that is force-free. MUST be >= 0.5 - " +
+        "cellHysteresis so a cell switch doesn't yank the handle across the cell (overshoot).")]
+    [SerializeField] float centerDeadzone = 0.4f;
+    [Tooltip("Extra fraction of a cell past the midpoint the handle must be pushed before the " +
+        "target cell switches, so the force doesn't flip on a boundary. Also gates the step sound.")]
+    [SerializeField] float cellHysteresis = 0.1f;
+    [Tooltip("Extra pull toward the centre (independent of pullStrength) that ramps up as the " +
+        "handle nears a CORNER, to fight diagonal crossings. 0 disables it.")]
+    [SerializeField] float cornerPullStrength = 0.4f;
+    [Tooltip("Corner-ness (the smaller of the two axis offsets, as a fraction of a cell) at which " +
+        "the corner pull starts, ramping to full at 0.5.")]
+    [SerializeField] float cornerThreshold = 0.25f;
+    [Tooltip("Falloff sharpness of the corner pull. 1 = linear; higher concentrates it right at " +
+        "the corner (very strong at the corner, dropping off quickly as you move away).")]
+    [SerializeField] float cornerSharpness = 3f;
+
+    [Header("Feedback")]
+    [Tooltip("How far past the field border (fraction of a cell) the handle must be before the fail " +
+        "sound fires. 0 = right AT the border. Negative would fire just before reaching it.")]
+    [SerializeField] float edgePushTriggerCells = 0f;
+    [Tooltip("How far back inside the handle must come before the edge sound can fire again, so " +
+        "resting against the border doesn't chatter. Fraction of a cell.")]
+    [SerializeField] float edgePushRearmCells = 0.1f;
+
+    [Header("Positioning")]
     [Tooltip("Speed used to move the handle to the bottom-right cell at game start (brief position " +
         "control, handle freed again afterwards).")]
     [SerializeField] float moveToStartSpeed = 15f;
@@ -61,118 +86,203 @@ public class StackHandle : MonoBehaviour
     [SerializeField] float settleAfterMoveSeconds = 0.3f;
     [SerializeField] bool debugLogging = false;
 
-    // Fired when the handle crosses into a different cell: (cell, cell is locked/stacked).
+    // Fired when the handle crosses into a different cell: (cell, cell is occupied).
     // GameAudio plays the per-step click off this.
     public event Action<Vector2Int, bool> OnCellChanged;
 
-    // Fired once when the handle is pushed against the field frame from an edge cell (trying to
-    // move outside the playfield). GameAudio plays the fail sound off this.
+    // Fired once when the handle reaches the border of the playing field. GameAudio plays the fail
+    // sound off this. Re-arms only after the handle has come back inside (see DetectEdgePush).
     public event Action OnEdgePush;
 
     Vector2Int currentCell;
     bool hasCurrent;
-    bool built;
+    bool fieldReady;
     bool positioning;
     Vector3 fieldMin;
     Vector3 fieldMax;
     bool edgePushArmed = true;
-    // The rails are only built once the handle has been driven to its start position (see
-    // MoveToStartCorner). Building them earlier means the handle has to cross walls on its way
-    // there and gets stuck on them - so they stay down until we're in position.
-    bool gatesReleased;
+    // The frame wall is only put up once the handle has been driven to its start position; it stays
+    // down during any positioning move so the handle can drive in unobstructed.
+    bool wallsReleased;
+    bool forceActive;
     // Where the handle sat before it was first driven into the field - it gets parked back here for
     // tutorial steps that don't use the upper handle (MoveOutOfField). `parked` then suppresses cell
-    // tracking / edge feedback, since it's sitting outside the playfield.
+    // tracking / edge feedback / force, since it's sitting outside the playfield.
     Vector3 homePosition;
     bool hasHome;
     bool parked;
-    // The outer field wall (upper-handle only) - created on the first BuildGates, then just
-    // enabled/disabled along with the rails so the handle can drive in unobstructed.
+    // The outer field wall (upper-handle only) - created on the first BuildField, then just
+    // enabled/disabled so the handle can drive in unobstructed.
     PantoBoxCollider frameObstacle;
-    readonly List<GridLineCollider> gates = new List<GridLineCollider>();
 
     void FixedUpdate()
     {
         // GridManager.Initialize runs in GameManager.Start - execution order relative to this
-        // component isn't guaranteed, so build lazily once the grid knows its size AND the handle
-        // has reached its start position (gatesReleased) and isn't mid-move.
+        // component isn't guaranteed, so set up lazily once the grid knows its size AND the handle
+        // has reached its start position, and isn't mid-move.
         if (gridManager == null || gridManager.CellSize <= 0f) return;
-        if (!built && gatesReleased && !positioning) BuildGates();
+        if (!fieldReady && wallsReleased && !positioning) BuildField();
 
         Vector3 real = PantoSystem.Instance.GetHandlePosition(true, transform.position);
         transform.position = real;
 
-        // No tracking while a positioning move sweeps the handle across the field (it would rattle
-        // off a click per crossed cell), nor while it's parked outside the field.
-        if (positioning || parked) return;
+        // The force field runs ONLY once the handle has actually been driven to its start corner and
+        // the field has been set up. Three separate cases are excluded, and all three matter:
+        //  - `positioning`: a move to the start corner (or back out) is in progress. Force must be
+        //    off for the WHOLE move - it is a motor command like the position control it would
+        //    otherwise fight, and it would rattle off a step click per cell swept across;
+        //  - `parked`: the handle is sitting outside the playfield, where there is nothing to feel;
+        //  - `!fieldReady`: the window between a resize (RebuildGates tears the field down) and the
+        //    next arrival. Without this the field kept running on a stale currentCell and stale
+        //    fieldMin/fieldMax after a resize - pulling toward a cell centre from the OLD grid and
+        //    testing edge pushes against the OLD bounds.
+        // Because fieldReady is only set by BuildField, which itself only runs once wallsReleased is
+        // set on arrival, "force is off while moving to the start position" holds by construction
+        // rather than by remembering to switch it off at each call site.
+        if (positioning || parked || !fieldReady)
+        {
+            ReleaseForce();
+            return;
+        }
 
         float cellSize = gridManager.CellSize;
         Vector2Int nearest = gridManager.WorldToGrid(real);
 
+        // Hysteresis + cardinal-only stepping: stick with the current target cell until the handle
+        // is pushed clearly past a boundary, then step it by ONE cell along whichever axis it moved
+        // furthest on - never diagonally to a corner cell in one go. This is also what gates the
+        // step sound, so the click lands on a real, committed cell change.
         if (!hasCurrent)
         {
             currentCell = nearest;
             hasCurrent = true;
         }
-        else if (nearest != currentCell)
+        else
         {
-            // Hysteresis: only register the change once the handle has moved clearly PAST the
-            // boundary into the new cell (popped through the rail), not the instant it crosses the
-            // midpoint boundary line - otherwise the step sound fires while still pushing the rail.
-            Vector3 fromCenter = real - gridManager.GridToWorld(currentCell);
-            float threshold = (0.5f + cellSwitchHysteresisCells) * cellSize;
-            if (Mathf.Abs(fromCenter.x) > threshold || Mathf.Abs(fromCenter.z) > threshold)
+            Vector3 fromCurrent = real - gridManager.GridToWorld(currentCell);
+            float ax = Mathf.Abs(fromCurrent.x) / cellSize;
+            float az = Mathf.Abs(fromCurrent.z) / cellSize;
+            if (Mathf.Max(ax, az) > 0.5f + cellHysteresis)
             {
-                currentCell = nearest;
-                // Occupied = locked stack OR the current falling piece, so the higher click also
-                // fires when moving over the falling piece.
-                bool occupied = gridManager.IsOccupied(nearest);
-                if (debugLogging) Debug.Log($"[StackHandle] cell={nearest} occupied={occupied}");
-                OnCellChanged?.Invoke(nearest, occupied);
+                Vector2Int step = ax >= az
+                    ? new Vector2Int((int)Mathf.Sign(fromCurrent.x), 0)
+                    : new Vector2Int(0, (int)Mathf.Sign(fromCurrent.z));
+                Vector2Int stepped = new Vector2Int(
+                    Mathf.Clamp(currentCell.x + step.x, 0, gridManager.Width - 1),
+                    Mathf.Clamp(currentCell.y + step.y, 0, gridManager.Height - 1));
+
+                if (stepped != currentCell)
+                {
+                    currentCell = stepped;
+                    // Occupied = locked stack OR the current falling piece, so the higher click also
+                    // fires when moving over the falling piece.
+                    bool moved = gridManager.IsOccupied(currentCell);
+                    if (debugLogging) Debug.Log($"[StackHandle] cell={currentCell} occupied={moved}");
+                    OnCellChanged?.Invoke(currentCell, moved);
+                }
             }
         }
 
         DetectEdgePush(real, cellSize);
+        ApplyMagneticForce(real, nearest, cellSize);
     }
 
-    // Fail feedback for pushing outward against the frame from an edge cell. Measures how far the
-    // handle is pushed PAST the field boundary (only relevant in an outermost cell), edge-triggered
-    // with hysteresis so a sustained push fires once and a light touch never fires. Hardware-only:
-    // in the emulator the frame collider raycast clamps the handle at the wall so it never reads
-    // past.
+    // The magnetic grid: a force-free deadzone around the cell centre, an edge detent ramping up to
+    // pullStrength at the boundary, and a separate corner pull. Occupancy is NOT expressed as force
+    // any more - the per-step click (OnCellChanged -> GameAudio) is the only "this cell is occupied"
+    // channel, which keeps the force field purely about grid navigation.
+    void ApplyMagneticForce(Vector3 real, Vector2Int nearest, float cellSize)
+    {
+        Vector3 toCenter = gridManager.GridToWorld(currentCell) - real;
+        toCenter.y = 0f;
+        float distance = toCenter.magnitude;
+
+        Vector3 force = Vector3.zero;
+        if (distance > cellSize * centerDeadzone && distance > 1e-4f)
+        {
+            // Edge detent: nothing inside the deadzone, ramping to pullStrength at the boundary.
+            float t = Mathf.Clamp01(Mathf.InverseLerp(cellSize * centerDeadzone, cellSize * 0.5f, distance));
+            force += (toCenter / distance) * (t * pullStrength);
+        }
+
+        // Corner pull: an extra pull that grows as the handle nears a corner, to fight diagonal
+        // crossings. It targets the PHYSICALLY NEAREST cell centre, NOT the hysteretic currentCell:
+        // at a shared corner currentCell often lags to the other cell, whose centre is behind the
+        // handle, so pulling toward it dragged the handle further INTO the corner instead of out.
+        // Toward the nearest centre it always points out of the corner the handle is actually in.
+        // "Corner-ness" is the SMALLER of the two axis offsets, so it only fires near corners (both
+        // axes far from centre), not near edge midpoints.
+        Vector3 toNearest = gridManager.GridToWorld(nearest) - real;
+        toNearest.y = 0f;
+        float nearDist = toNearest.magnitude;
+        float cornerness = Mathf.Min(Mathf.Abs(toNearest.x), Mathf.Abs(toNearest.z)) / cellSize;
+        if (nearDist > 1e-4f && cornerness > cornerThreshold)
+        {
+            // Sharpen the ramp so the pull is concentrated right at the corner and falls off
+            // quickly as you move away (cornerSharpness > 1).
+            float c = Mathf.Pow(Mathf.Clamp01(Mathf.InverseLerp(cornerThreshold, 0.5f, cornerness)), cornerSharpness);
+            force += (toNearest / nearDist) * (c * cornerPullStrength);
+        }
+
+        PantoSystem.Instance.ApplyForce(true, force, force.magnitude);
+        forceActive = true;
+    }
+
+
+    // Hands the handle back to the firmware. Called whenever force must not be running (positioning,
+    // parked, disabled) - leaving force mode on would keep overriding wall rendering and keep the
+    // last force vector applied.
+    void ReleaseForce()
+    {
+        if (!forceActive) return;
+        forceActive = false;
+        if (PantoSystem.Instance != null) PantoSystem.Instance.StopApplyingForce(true);
+    }
+
+    // Fail feedback for reaching the edge of the playing field. `push` is the SIGNED distance past
+    // the field boundary along whichever outer edge the handle is against - negative while inside,
+    // zero exactly ON the border. With edgePushTriggerCells at 0 the sound therefore fires the
+    // moment the border is reached, rather than after being pushed a margin past it.
+    // Edge-triggered: it fires once and only re-arms after the handle has come back inside by
+    // edgePushRearmCells, so resting against the border doesn't chatter.
     void DetectEdgePush(Vector3 real, float cellSize)
     {
-        float push = 0f;
+        // Interior cell: nowhere near an outer edge, so nothing to test - just re-arm.
+        float push = float.NegativeInfinity;
         if (currentCell.x == 0) push = Mathf.Max(push, fieldMin.x - real.x);
         else if (currentCell.x == gridManager.Width - 1) push = Mathf.Max(push, real.x - fieldMax.x);
         if (currentCell.y == 0) push = Mathf.Max(push, fieldMin.z - real.z);
         else if (currentCell.y == gridManager.Height - 1) push = Mathf.Max(push, real.z - fieldMax.z);
 
-        float margin = edgePushMarginCells * cellSize;
-        if (push > margin)
+        if (float.IsNegativeInfinity(push))
+        {
+            edgePushArmed = true;
+            return;
+        }
+
+        float trigger = edgePushTriggerCells * cellSize;
+        if (push >= trigger)
         {
             if (edgePushArmed)
             {
                 edgePushArmed = false;
-                if (debugLogging) Debug.Log($"[StackHandle] edge push ({push / cellSize:F2} cells past edge)");
+                if (debugLogging) Debug.Log($"[StackHandle] edge reached ({push / cellSize:F2} cells past border)");
                 OnEdgePush?.Invoke();
             }
         }
-        else if (push < margin * 0.5f)
+        else if (push < trigger - edgePushRearmCells * cellSize)
         {
             edgePushArmed = true;
         }
     }
 
-    // Puts up ALL walls the upper handle can feel: the outer field FRAME plus rail lines on the
-    // INNER cell boundaries (outermost skipped - the frame covers those): 9 vertical + 19
-    // horizontal for 10x20, doubled if railBothSides. Uploaded through PantoSystem's staggered
-    // queue. Only runs once the handle is in position (see gatesReleased).
-    void BuildGates()
+    // Puts the outer frame wall up and caches the field bounds the edge-push test needs. Only runs
+    // once the handle is in position (see wallsReleased).
+    void BuildField()
     {
-        built = true;
+        fieldReady = true;
 
-        // The frame is an upper-handle-only wall, so it belongs to this component's wall lifecycle:
+        // The frame is an upper-handle-only wall, so it belongs to this component's lifecycle:
         // created once, then just re-enabled, so it is DOWN while the handle drives to the corner
         // (it starts outside the field - with the frame up it can never get in).
         if (frameObstacle == null)
@@ -182,68 +292,39 @@ public class StackHandle : MonoBehaviour
 
         float cellSize = gridManager.CellSize;
         Vector3 min = gridManager.GridToWorld(new Vector2Int(0, 0)) - new Vector3(cellSize, 0f, cellSize) / 2f;
-        float width = gridManager.Width * cellSize;
-        float height = gridManager.Height * cellSize;
         fieldMin = min;
-        fieldMax = min + new Vector3(width, 0f, height);
-        float displacement = railDisplacementCells * cellSize;
+        fieldMax = min + new Vector3(gridManager.Width * cellSize, 0f, gridManager.Height * cellSize);
 
-        void CreateGate(Vector3 a, Vector3 b)
-        {
-            gates.Add(PantoSystem.Instance.CreateGridLine(a, b, GridLineCollider.Kind.Rail, displacement, onUpper: true, onLower: false));
-            if (railBothSides)
-                gates.Add(PantoSystem.Instance.CreateGridLine(b, a, GridLineCollider.Kind.Rail, displacement, onUpper: true, onLower: false));
-        }
-
-        for (int i = 1; i < gridManager.Width; i++)
-        {
-            float x = min.x + i * cellSize;
-            CreateGate(new Vector3(x, 0f, min.z), new Vector3(x, 0f, min.z + height));
-        }
-        for (int j = 1; j < gridManager.Height; j++)
-        {
-            float z = min.z + j * cellSize;
-            CreateGate(new Vector3(min.x, 0f, z), new Vector3(min.x + width, 0f, z));
-        }
-
-        if (debugLogging)
-            Debug.Log($"[StackHandle] built {gates.Count} boundary rails (railDisplacement={railDisplacementCells})");
+        if (debugLogging) Debug.Log($"[StackHandle] field ready ({gridManager.Width}x{gridManager.Height})");
     }
 
     /// <summary>
-    /// Drops the rail grid so it can be rebuilt for a new grid size (tutorial resize). The rails
-    /// stay DOWN until the next MoveToStartCorner has put the handle in position - otherwise the
-    /// handle would have to fight through walls on its way there. Cell tracking resets so the first
-    /// cell after the resize doesn't fire a spurious step.
+    /// Drops the field setup so it can be rebuilt for a new grid size (tutorial resize). It stays
+    /// down until the next MoveToStartCorner has put the handle in position. Cell tracking resets so
+    /// the first cell after the resize doesn't fire a spurious step.
     /// </summary>
     public void RebuildGates()
     {
-        TearDownGates();
+        TearDownField();
         hasCurrent = false;
     }
 
-    // Takes every wall the upper handle can feel back down (rails removed, frame disabled) and
-    // suspends rebuilding (gatesReleased = false) until the handle is back in position. Rail
-    // removal is queued one-op-per-frame by PantoSystem (anti-flood); the frame is only disabled
-    // (single packet) since its geometry never changes and it can simply be re-enabled.
-    void TearDownGates()
+    // Takes the frame wall back down and suspends rebuilding until the handle is back in position.
+    // The frame is only disabled (single packet) since its geometry never changes. Clearing
+    // fieldReady also switches the force field off (see FixedUpdate); ReleaseForce is called here
+    // too so the handle is handed back to the firmware IMMEDIATELY rather than a frame later.
+    void TearDownField()
     {
-        foreach (GridLineCollider gate in gates)
-        {
-            if (gate == null) continue;
-            PantoSystem.Instance.RemoveObstacle(gate); // captures id + queues the serial remove
-            Destroy(gate.gameObject);                  // then drop the Unity object + its visual
-        }
-        gates.Clear();
+        ReleaseForce();
         if (frameObstacle != null) frameObstacle.Disable();
-        built = false;
-        gatesReleased = false;
+        fieldReady = false;
+        wallsReleased = false;
     }
 
     /// <summary>
     /// Drives the handle to the bottom-right cell via position control, then frees it again (so the
-    /// rails render). Called by GameManager on game start/restart. Cell tracking is muted during
-    /// the sweep so it doesn't rattle off step clicks.
+    /// force field can take over). Called by GameManager on game start/restart. Cell tracking and
+    /// force are muted during the sweep.
     ///
     /// Uses a persistent follow target re-commanded every frame (the toolkit's continuous-follow
     /// via MarkFollowReady) rather than PantoHandle.MoveToPosition, which sends the position ONCE
@@ -270,14 +351,14 @@ public class StackHandle : MonoBehaviour
         currentCell = corner;
         hasCurrent = true;
         parked = false;
-        gatesReleased = true; // in position - the next FixedUpdate builds the rails
+        wallsReleased = true; // in position - the next FixedUpdate puts the frame up
     }
 
     /// <summary>
     /// Parks the handle back OUTSIDE the playfield, where it sat before it was first driven in -
     /// for tutorial steps where the upper handle plays no role and leaving it sitting in the field
-    /// is just confusing. The walls stay DOWN (there is nothing to feel out there); the next
-    /// MoveToStartCorner brings it back in and puts them up again.
+    /// is just confusing. The frame stays DOWN (there is nothing to feel out there); the next
+    /// MoveToStartCorner brings it back in and puts it up again.
     /// </summary>
     public async Task MoveOutOfField()
     {
@@ -285,27 +366,23 @@ public class StackHandle : MonoBehaviour
         if (!hasHome) return; // never captured a home position - nothing to return to
 
         await DriveHandleTo(homePosition);
-        parked = true;    // suppress cell tracking / edge feedback while it sits outside
+        parked = true;    // suppress cell tracking / edge feedback / force while it sits outside
         hasCurrent = false;
     }
 
-    // Drives the handle to a world position, taking ALL walls down first (they would block it) and
-    // leaving them down - the caller decides whether to put them back up (gatesReleased). Uses a
-    // persistent follow target re-commanded every frame (the toolkit's continuous-follow via
-    // MarkFollowReady) rather than PantoHandle.MoveToPosition, which sends the position ONCE and
-    // frees the handle after a fixed ~3s SwitchTo timeout - on this device that single packet can be
-    // dropped racing firmware readiness, or the handle can be too far to arrive in 3s, so it never
-    // arrives. Re-sending every frame guarantees arrival; we free only once it's actually there (or
-    // after moveToStartTimeoutSeconds as a failsafe).
+    // Drives the handle to a world position, taking the frame down first (it would block it) and
+    // leaving it down - the caller decides whether to put it back up (wallsReleased). Force mode is
+    // released first: position control and force are both motor commands and must not overlap.
     async Task DriveHandleTo(Vector3 target)
     {
         positioning = true;
+        ReleaseForce();
 
-        // Walls out of the way FIRST: with them up the handle collides on its way and never arrives.
-        TearDownGates();
+        // Wall out of the way FIRST: with it up the handle collides on its way and never arrives.
+        TearDownField();
         float drainDeadline = Time.time + 3f;
         while (!PantoSystem.Instance.ObstacleQueueEmpty && Time.time < drainDeadline)
-            await Task.Yield(); // let the removals actually reach the device before driving through
+            await Task.Yield(); // let the change actually reach the device before driving through
 
         GameObject targetObj = new GameObject("StackHandleTarget");
         targetObj.transform.position = target;
@@ -324,7 +401,7 @@ public class StackHandle : MonoBehaviour
             await Task.Yield();
         }
 
-        PantoSystem.Instance.FreeHandle(isUpper: true); // free again (walls only work on a free handle)
+        PantoSystem.Instance.FreeHandle(isUpper: true); // free again before force mode resumes
 
         // Let the handle settle on the target BEFORE destroying the follow target. Destroying it
         // immediately after Free() left the handle slightly off (a race: the target vanished while
@@ -335,4 +412,6 @@ public class StackHandle : MonoBehaviour
 
         positioning = false;
     }
+
+    void OnDisable() => ReleaseForce();
 }

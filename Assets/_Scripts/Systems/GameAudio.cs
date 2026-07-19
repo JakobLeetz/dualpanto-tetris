@@ -98,7 +98,7 @@ public class GameAudio : MonoBehaviour
     void HandleRotated(List<Vector2Int> cells) => Sfx(rotateSound);
 
     // Shared handler: a blocked rotation, a blocked left/right shift, and the stack handle being
-    // pushed against the field edge all play the same sound (failSound) - all are "you tried to
+    // reaching the field border all play the same sound (failSound) - all are "you tried to
     // move and it's not possible" feedback.
     void HandleFailed() => Sfx(failSound);
 

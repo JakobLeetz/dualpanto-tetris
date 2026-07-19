@@ -11,13 +11,15 @@ using UnityEngine;
 /// GameManager (PieceSource / AutoSpawn / ScoringEnabled / SpawnPiece) and GridManager (Resize /
 /// AddLockedCells) plus the lower handle's on-demand trace (PieceHandle.TraceShape).
 ///
-/// Seven levels: 1 explore the field, 2 place a square, 3 find a block and stack, 4 rotation,
-/// 5 a bigger field with new shapes, 6 scoring, 7 full size with all seven shapes. Level 7 already
-/// ends on the standard 8x16 grid, so the handoff to free play needs no further resize.
+/// Six levels: 1 explore the field, 2 place a square, 3 find a block and stack, 4 rotation,
+/// 5 a bigger field (6x12) with all remaining shapes, 6 scoring. **6x12 is the FINAL size** - the
+/// field is never grown again, so the handoff to free play is just a closing line and hands the
+/// player the very board they have been practising on. Level 5's ResizeTo is the single place that
+/// defines that size.
 ///
-/// Levels 3-7 all end in the same shared PracticePhase: pieces keep falling until the player has
-/// cleared a target number of lines by themselves. Mistakes there are COACHED, never a failure -
-/// only level 2 and level 3's scripted first piece can actually restart their level.
+/// Levels 3, 5 and 6 end in the same shared PracticePhase: pieces keep falling until the player has
+/// cleared a target number of lines by themselves AND met every shape it can spawn. Mistakes there
+/// are COACHED, never a failure - only level 2's and levels 3/4's scripted pieces restart a level.
 ///
 /// "Which handle" is spoken, not shaken (no vibration haptic exists / is stable): "upper handle" =
 /// the free handle the player moves (stack), "lower handle" = the device-driven piece handle.
@@ -27,10 +29,6 @@ public class TutorialManager : MonoBehaviour
     [SerializeField] GridManager gridManager;
     [SerializeField] PieceHandle pieceHandle;
     [SerializeField] StackHandle stackHandle;
-
-    [Header("Standard (free-play) size the tutorial ends into")]
-    [SerializeField] int standardWidth = 8;
-    [SerializeField] int standardHeight = 16;
 
     [Header("Fail-safe timing")]
     [Tooltip("Seconds of no progress before an inactivity reminder is spoken.")]
@@ -633,10 +631,9 @@ public class TutorialManager : MonoBehaviour
     /// </summary>
     async Task HandOffToFreePlay()
     {
-        await ResizeTo(standardWidth, standardHeight);
-        await pieceHandle.MoveToSpawnArea();
-        await Say("The playing field has changed size one last time. " +
-                  "This is the full field, 8 by 16.");
+        // No resize here: 6x12 (set in level 5) is the final size, so the field the player has been
+        // practising on IS the one they keep. Nothing to announce about size, and the board carries
+        // straight over from level 6.
         await Say("You now know all there is to know. " +
                   "Continue clearing lines and try getting the highest score possible.");
         GameManager.Instance.EnterFreePlayFromTutorial();

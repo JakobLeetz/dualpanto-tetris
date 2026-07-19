@@ -16,8 +16,12 @@ public class GameManager : Singleton<GameManager>
     [SerializeField] StackHandle stackHandle;
     [SerializeField] PieceHandle pieceHandle;
     [SerializeField] TutorialManager tutorialManager;
-    [SerializeField] int gridWidth = 8;
-    [SerializeField] int gridHeight = 16;
+    // 6x12 is the game's standard size: the tutorial grows the field to exactly this in level 5 and
+    // never past it, so both entry points (menu -> free play, and tutorial -> free play) end up on
+    // the same board. The scene's serialized values are what actually apply; these defaults are kept
+    // in sync so they don't mislead.
+    [SerializeField] int gridWidth = 6;
+    [SerializeField] int gridHeight = 12;
     [Tooltip("Seconds to wait after load before the game can be started, so the device/handles are " +
         "fully functional first (they take ~10s; starting earlier makes the first piece fall during " +
         "loading). Starting is gated on this AND a right-pedal press.")]

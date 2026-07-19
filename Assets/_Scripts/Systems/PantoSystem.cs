@@ -166,11 +166,24 @@ public class PantoSystem : StaticInstance<PantoSystem>
     /// </summary>
     public void RotateHandle(bool isUpper, float angleDegrees) => GetHandle(isUpper).Rotate(angleDegrees);
 
-    // NOTE: no ApplyForce wrapper. Every Unity-side force field tried on the stack handle
-    // (spring/deadzone/hysteresis/corner-pull, and later speed-gated/faded variants) ran away or
-    // oscillated on hardware - a ~50Hz position-read/force-send loop has no stable damping here.
-    // The stack handle now uses firmware rail geometry only (see StackHandle). Force mode also
-    // overrides firmware wall/rail rendering per handle, so the two can't coexist anyway.
+    /// <summary>
+    /// Applies a continuous force to the handle (toolkit force mode). `direction` is normalized and
+    /// `strength` clamped to [0,1] by the toolkit, so passing a force vector as direction with its
+    /// magnitude as strength just caps the force at unit length. No-op in debug/emulator mode
+    /// (SendMotor only fires when !debug). Call every FixedUpdate while a force should be felt.
+    ///
+    /// HISTORY, worth knowing before touching StackHandle: several Unity-side force fields
+    /// (spring/deadzone/hysteresis/corner-pull, plus speed-gated and faded variants) ran away or
+    /// oscillated on this device - a ~50Hz position-read/force-send loop has no inherent damping,
+    /// so a released handle can pump energy instead of settling. Force mode ALSO overrides firmware
+    /// wall/rail rendering on that handle, so a force field and firmware walls cannot both be felt
+    /// on the upper handle at the same time.
+    /// </summary>
+    public void ApplyForce(bool isUpper, Vector3 direction, float strength) =>
+        GetHandle(isUpper).ApplyForce(direction, strength);
+
+    /// <summary>Ends force mode on the handle, handing it back to the firmware (walls render again).</summary>
+    public void StopApplyingForce(bool isUpper) => GetHandle(isUpper).StopApplyingForce();
 
     /// <summary>
     /// Registers a box obstacle matching the GameObject's BoxCollider, so the stack handle can feel it.
